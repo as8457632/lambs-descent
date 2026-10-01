@@ -228,10 +228,10 @@ class Player {
           const n = 3 + Math.floor(lvl / 2), base = Math.atan2(uy, ux);
           for (let i = 0; i < n; i++) {
             const a = base + (i - (n - 1) / 2) * .22 + rand(-.05, .05);
-            const sp = this.tearSpeed * rand(.55, .85);
+            const sp = this.tearSpeed * rand(.72, .95);
             room.tears.push(new Tear(this.x + Math.cos(a) * 14, this.y + Math.sin(a) * 14,
               Math.cos(a) * sp, Math.sin(a) * sp, weaponDmg(this, w), 6.5 + lvl * .8, true,
-              { life: 15 + lvl, colorKey: 'flame' }));
+              { life: 24 + lvl * 3, colorKey: 'flame' }));
           }
           SFX.play('flame');
         } else if (w.id === 'laser') {
@@ -704,8 +704,8 @@ function openChest(room, c) {
 // ── 武器系统：四种枪，拾取换装/升级（重复拾取 +1 级，最高 5 级）──
 const WEAPONS = {
   tear:  { id: 'tear',  name: '泪弹枪', c: '#9cc4ee', glyph: '泪', cd: 13, mult: 1,   max: 5, desc: '均衡的基础火力' },
-  laser: { id: 'laser', name: '激光枪', c: '#ff5f5f', glyph: '激', cd: 46, mult: 2.6, max: 5, desc: '贯穿一切的光束' },
-  light: { id: 'light', name: '闪电枪', c: '#ffe066', glyph: '雷', cd: 30, mult: 1.5, max: 5, desc: '在敌人间跳跃的电弧' },
+  laser: { id: 'laser', name: '激光枪', c: '#ff5f5f', glyph: '激', cd: 24, mult: 3.0, max: 5, desc: '贯穿一切的光束' },
+  light: { id: 'light', name: '闪电枪', c: '#ffe066', glyph: '雷', cd: 22, mult: 1.8, max: 5, desc: '在敌人间跳跃的电弧' },
   flame: { id: 'flame', name: '火焰枪', c: '#ff9040', glyph: '焰', cd: 11, mult: .5,  max: 5, desc: '近距扇形烈焰，以量取胜' },
 };
 function weaponDmg(p, w) { return p.dmg * w.mult * (1 + .35 * (p.weapon.lvl - 1)); }

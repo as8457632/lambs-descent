@@ -17,6 +17,9 @@ const game = {
 function shake(n) { game.shakeAmt = Math.max(game.shakeAmt, n); }
 
 let cv, cx;
+const BUILD = 'v1.0.2'; // 版本号水印：确认玩家加载的是否为最新构建
+window.__BUILD = BUILD;
+window.DBG_VP = () => ({ build: BUILD, inner: [innerWidth, innerHeight], vv: window.visualViewport ? [Math.round(visualViewport.width), Math.round(visualViewport.height)] : null, dpr: devicePixelRatio, css: [Math.round(cv ? cv.getBoundingClientRect().width : 0), Math.round(cv ? cv.getBoundingClientRect().height : 0)] });
 
 function boot() {
   cv = document.getElementById('game');
@@ -190,6 +193,11 @@ function enterRoom(room, fromDir) {
 function update() {
   game.time++;
   Input.tick();
+  if (Input.pressed('KeyF')) { // F 一键全屏：窗口太小时的自救键
+    const el = document.documentElement;
+    if (document.fullscreenElement || document.webkitFullscreenElement) (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    else (el.requestFullscreen || el.webkitRequestFullscreen).call(el);
+  }
   if (game.state === 'title') {
     const mt = Touch.menuTap; Touch.menuTap = null;
     if (Input.pressed('Enter')) newRun();
@@ -538,6 +546,8 @@ function drawTitle() {
   cx.fillStyle = '#8a7a66'; cx.font = '12px monospace';
   cx.fillText(Touch.supported() ? '左摇杆移动 · 右摇杆射击 · 打怪升级三选一 · 攒魂进工坊' : 'WASD 移动 · 方向键射击 · E 炸弹 · 打怪升级三选一 · 攒魂进工坊', ROOM_W / 2, 490);
   ctx.restore(); // 归还标题居中变换
+  cx.fillStyle = 'rgba(138,115,96,.55)'; cx.font = '10px monospace'; cx.textAlign = 'right';
+  cx.fillText(BUILD, CANVAS_W - 6, CANVAS_H - 6); cx.textAlign = 'left';
 }
 
 function statLines() {

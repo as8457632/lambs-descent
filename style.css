@@ -50,7 +50,10 @@ body {
 }
 #fsbtn:active { background: #3a2818; }
 @media (orientation: portrait) and (pointer: coarse) {
-  #rotate, #fsbtn { display: inline-block; }
+  #rotate { display: inline-block; }
+}
+@media (pointer: coarse) {
+  #fsbtn { display: inline-block; } /* 触屏设备横竖屏都给出全屏按钮，窗口偏小时一键放大 */
 }
 /* 全屏时：铺满、隐藏页面装饰 */
 :fullscreen body, :-webkit-full-screen body { align-items: center; }

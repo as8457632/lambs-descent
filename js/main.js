@@ -17,7 +17,7 @@ const game = {
 function shake(n) { game.shakeAmt = Math.max(game.shakeAmt, n); }
 
 let cv, cx;
-const BUILD = 'v1.0.2'; // 版本号水印：确认玩家加载的是否为最新构建
+const BUILD = 'v1.0.3'; // 版本号水印：确认玩家加载的是否为最新构建
 window.__BUILD = BUILD;
 window.DBG_VP = () => ({ build: BUILD, inner: [innerWidth, innerHeight], vv: window.visualViewport ? [Math.round(visualViewport.width), Math.round(visualViewport.height)] : null, dpr: devicePixelRatio, css: [Math.round(cv ? cv.getBoundingClientRect().width : 0), Math.round(cv ? cv.getBoundingClientRect().height : 0)] });
 
@@ -40,6 +40,9 @@ function boot() {
     const cw = Math.floor(CANVAS_W * s) + 'px', chh = Math.floor(CANVAS_H * s) + 'px';
     if (cv.style.width !== cw) cv.style.width = cw;
     if (cv.style.height !== chh) cv.style.height = chh;
+    game.fitScale = s;
+    const fsb = document.getElementById('fsbtn');
+    if (fsb) fsb.classList.toggle('show', s < .74); // 窗口偏小时桌面/横屏也显示全屏按钮
   }
   window.__fitCanvas = fitCanvas;
   addEventListener('resize', () => { fitCanvas(); setTimeout(fitCanvas, 300); }); // 过渡态双保险
@@ -435,6 +438,16 @@ function draw() {
   cx.restore();
 
   drawHUD(cx, game);
+  if (game.state === 'play' && cv.getBoundingClientRect().width < 700) { // 画面过小：自救指引 + 视口自检数据
+    cx.fillStyle = 'rgba(120,20,20,.88)'; cx.fillRect(ROOM_W / 2 - 258, HUD_H + 2, 516, 36);
+    cx.strokeStyle = '#e8c85e'; cx.lineWidth = 1; cx.strokeRect(ROOM_W / 2 - 258, HUD_H + 2, 516, 36);
+    cx.fillStyle = '#ffe0c0'; cx.font = 'bold 13px monospace'; cx.textAlign = 'center';
+    cx.fillText('画面过小！按 F 全屏 / 最大化窗口 / 按 Ctrl+0 重置缩放', ROOM_W / 2, HUD_H + 17);
+    cx.font = '10px monospace'; cx.fillStyle = '#e0b090';
+    const vv = window.visualViewport;
+    cx.fillText(`诊断[${BUILD}] inner=${innerWidth}x${innerHeight} vv=${vv ? Math.round(vv.width) + 'x' + Math.round(vv.height) + ' scale=' + vv.scale.toFixed(2) : '-'} dpr=${devicePixelRatio}`, ROOM_W / 2, HUD_H + 32);
+    cx.textAlign = 'left';
+  }
   if (game.state === 'play' && game.cur.quota && !game.cur.cleared) { // 房间底部配额进度：杀到多少才开门一目了然
     const q = game.cur.quota, k = Math.min(game.cur.killed, q), cxb = ROOM_W / 2;
     cx.fillStyle = 'rgba(0,0,0,.55)'; cx.fillRect(cxb - 72, CANVAS_H - 24, 144, 15);

@@ -55,6 +55,7 @@ body {
 @media (pointer: coarse) {
   #fsbtn { display: inline-block; } /* 触屏设备横竖屏都给出全屏按钮，窗口偏小时一键放大 */
 }
+#fsbtn.show { display: inline-block !important; } /* JS 检测到窗口偏小自动亮起 */
 /* 全屏时：铺满、隐藏页面装饰 */
 :fullscreen body, :-webkit-full-screen body { align-items: center; }
 :fullscreen #help, :-webkit-full-screen #help,

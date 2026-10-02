@@ -17,7 +17,7 @@ const game = {
 function shake(n) { game.shakeAmt = Math.max(game.shakeAmt, n); }
 
 let cv, cx;
-const BUILD = 'v2.4'; // 版本号水印：确认玩家加载的是否为最新构建
+const BUILD = 'v2.5'; // 版本号水印：确认玩家加载的是否为最新构建
 window.__BUILD = BUILD;
 window.DBG_VP = () => ({ build: BUILD, inner: [innerWidth, innerHeight], vv: window.visualViewport ? [Math.round(visualViewport.width), Math.round(visualViewport.height)] : null, dpr: devicePixelRatio, css: [Math.round(cv ? cv.getBoundingClientRect().width : 0), Math.round(cv ? cv.getBoundingClientRect().height : 0)] });
 
@@ -292,7 +292,9 @@ function update() {
   const mt0 = Touch.menuTap;
   if (game.mapOpen) {
     Touch.menuTap = null; Touch.tapped = false;
-    if (Input.pressed('Escape') || (mt0 && inZone(mt0, mapCloseZone()))) game.mapOpen = false;
+    if (Input.pressed('Escape')) game.mapOpen = false;
+    else if (mt0 && inZone(mt0, mapCloseZone())) game.mapOpen = false;
+    else if (mt0) game.mapAuto = true; // 轻点地图空白 → 回中跟随
     return;
   }
   if (mt0 && inZone(mt0, minimapZone())) { Touch.menuTap = null; game.mapOpen = true; game.mapAuto = true; SFX.play('item'); }
@@ -420,6 +422,7 @@ function onRoomCleared(room) {
     room.pickups.push(new Pickup('chest', cxr - 40, cyr));
     if (game.floorNum < 3) room.trapdoor = { x: cxr + 44, y: cyr };
     else room.finalChest = true;
+    game.hint = { text: game.floorNum < 3 ? 'Boss 已死！清光残敌，踩开启的地洞下潜' : 'Boss 已死！打开宝箱解救人质', t: 300 };
   } else {
     rollClearReward(room, game.floorNum);
     if (room.type === 'normal' && !game.floor.gaveStarter) {
@@ -446,12 +449,13 @@ function tryDoors(room) {
 
 game.die = function () {
   game.state = 'dead'; game.deaths++;
+  game.mapOpen = false;
   game.toast = null; game.hint = null; // 结算屏不残留战斗提示文字
   game.bankSouls();
   SFX.play('death');
 };
 game.victory = function () {
-  game.state = 'win';
+  game.state = 'win'; game.mapOpen = false;
   const m = Meta.load();
   if (!m.cleared) { game.soulsRun += 300; m.cleared = true; } // 首通大奖
   game.bankSouls();
@@ -496,7 +500,7 @@ function draw() {
     cx.fillStyle = 'rgba(120,20,20,.88)'; cx.fillRect(ROOM_W / 2 - 258, HUD_H + 2, 516, 36);
     cx.strokeStyle = '#e8c85e'; cx.lineWidth = 1; cx.strokeRect(ROOM_W / 2 - 258, HUD_H + 2, 516, 36);
     cx.fillStyle = '#ffe0c0'; cx.font = 'bold 13px monospace'; cx.textAlign = 'center';
-    cx.fillText('画面过小！按 F 全屏 / 最大化窗口 / 按 Ctrl+0 重置缩放', ROOM_W / 2, HUD_H + 17);
+    cx.fillText(Touch.supported() ? '画面过小！点右下 ⛶ 强制横屏全屏' : '画面过小！按 F 全屏 / 最大化窗口 / 按 Ctrl+0 重置缩放', ROOM_W / 2, HUD_H + 17);
     cx.font = '10px monospace'; cx.fillStyle = '#e0b090';
     const vv = window.visualViewport;
     cx.fillText(`诊断[${BUILD}] inner=${innerWidth}x${innerHeight} vv=${vv ? Math.round(vv.width) + 'x' + Math.round(vv.height) + ' scale=' + vv.scale.toFixed(2) : '-'} dpr=${devicePixelRatio}`, ROOM_W / 2, HUD_H + 32);
@@ -521,14 +525,14 @@ function draw() {
     cx.fillStyle = `rgba(180,20,20,${(game.flashT / 14) * .22})`;
     cx.fillRect(0, 0, CANVAS_W, CANVAS_H);
   }
-  if (game.paused && game.state === 'play') {
+  if (game.paused && game.state === 'play' && !game.mapOpen) {
     cx.fillStyle = 'rgba(0,0,0,.55)'; cx.fillRect(0, 0, CANVAS_W, CANVAS_H);
     cx.fillStyle = '#d8cba8'; cx.font = 'bold 34px monospace'; cx.textAlign = 'center';
     cx.fillText('暂停', ROOM_W / 2, CANVAS_H / 2);
     cx.font = '14px monospace'; cx.fillStyle = '#a8937c';
-    cx.fillText(Touch.supported() ? '点右下 ‖ 按钮继续' : '按 P 继续', ROOM_W / 2, CANVAS_H / 2 + 30);
+    cx.fillText(Touch.supported() ? '点右下暂停按钮继续' : '按 P 继续', ROOM_W / 2, CANVAS_H / 2 + 30);
   }
-  if ((Touch.supported() || Touch.active) && game.state === 'play') drawTouchUI(cx, game.time);
+  if ((Touch.supported() || Touch.active) && game.state === 'play' && !game.mapOpen) drawTouchUI(cx, game.time);
 
   if (game.state === 'dead') drawDeathScreen();
   if (game.state === 'win') drawWinScreen();

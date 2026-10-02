@@ -217,9 +217,11 @@ function drawProp(ctx, x, y, sp, frac, solid) {
         ctx.fillStyle = bc; ctx.beginPath(); ctx.arc(bx, by, br, 0, TAU); ctx.fill(); ctx.stroke();
       }
   }
-  if (!solid) { // 可破坏裂纹角标
-    ctx.strokeStyle = 'rgba(255,240,200,.55)'; ctx.lineWidth = 1.6;
-    ctx.beginPath(); ctx.moveTo(-6, -10); ctx.lineTo(-2, -6); ctx.lineTo(-5, -2); ctx.stroke();
+  if (!solid) { // 可破坏裂纹角标：亮黄醒目
+    ctx.strokeStyle = 'rgba(255,224,120,.9)'; ctx.lineWidth = 2.4; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(-7, -11); ctx.lineTo(-2, -6); ctx.lineTo(-6, -1); ctx.lineTo(-1, 4); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,224,120,.9)';
+    ctx.beginPath(); ctx.arc(8, -10, 1.8, 0, TAU); ctx.fill(); // 右上角"可破坏"点标
   }
   ctx.restore();
 }
@@ -248,16 +250,18 @@ function drawPlayer(ctx, p, t) {
   ctx.strokeStyle = 'rgba(15,10,6,.6)'; ctx.lineWidth = 1.6; ctx.stroke();
   ctx.fillStyle = 'rgba(0,0,0,.22)'; ctx.fillRect(-9, 6 + bob, 18, 3); // 弹匣袋带
   ctx.fillStyle = shade(ch.suit, 22); ctx.fillRect(-6, 2 + bob, 4, 4); ctx.fillRect(2, 2 + bob, 4, 4); // 胸袋
-  // 枪械+双臂：朝下半球画在头前（被身体压住自然），朝上半球画在头后（避免整杆枪被头吞）
+  // 枪械+双臂：朝下半球枪+手画在头前，朝上半球只补枪杆（手臂收头后，杜绝横穿脸）
   const gunFront = p.aim.y >= -.2;
-  const drawGun = () => {
+  const drawGun = withArms => {
     ctx.save(); ctx.rotate(ga); ctx.translate(0, bob * .3);
+    if (Math.cos(ga) < 0) ctx.scale(1, -1); // 朝左上下镜像：弹匣/准星不翻转
     ctx.fillStyle = ch.gun; ctx.fillRect(4, -2.2, 21, 4.4);
     ctx.fillStyle = shade(ch.gun, 26); ctx.fillRect(6, -2.6, 8, 5.2);
     ctx.fillStyle = shade(ch.gun, -18); ctx.fillRect(11, 2.4, 3.4, 5);
     ctx.fillRect(22, -1.4, 4, 1.6);
     ctx.fillStyle = 'rgba(255,255,255,.16)'; ctx.fillRect(6, -2.6, 19, 1.2);
     ctx.restore();
+    if (!withArms) return;
     const h1x = Math.cos(ga) * 9, h1y = Math.sin(ga) * 9 + bob * .3;
     const h2x = Math.cos(ga) * 16, h2y = Math.sin(ga) * 16 + bob * .3;
     ctx.strokeStyle = shade(ch.suit, -10); ctx.lineWidth = 3.6; ctx.lineCap = 'round';
@@ -266,7 +270,7 @@ function drawPlayer(ctx, p, t) {
     ctx.fillStyle = ch.skin;
     ctx.beginPath(); ctx.arc(h1x, h1y, 2.4, 0, TAU); ctx.arc(h2x, h2y, 2.4, 0, TAU); ctx.fill();
   };
-  if (gunFront) drawGun();
+  if (gunFront) drawGun(true);
   // 头
   const hg = ctx.createRadialGradient(-3, -13 + bob, 2, 0, -8 + bob, 14);
   hg.addColorStop(0, shade(ch.skin, 18)); hg.addColorStop(1, ch.skin);
@@ -280,8 +284,8 @@ function drawPlayer(ctx, p, t) {
   } else if (ch.style === 'ponytail') {
     ctx.beginPath(); ctx.arc(0, -9 + bob, 11.6, Math.PI * .9, Math.PI * 2.1); ctx.fill();
     ctx.strokeStyle = ch.hair; ctx.lineWidth = 4.5;
-    ctx.beginPath(); ctx.moveTo(-8, -12 + bob); ctx.quadraticCurveTo(-16, -6 + bob, -13, 4 + bob); ctx.stroke();
-    ctx.fillStyle = '#c94a6a'; ctx.beginPath(); ctx.arc(-10, -9 + bob, 1.8, 0, TAU); ctx.fill(); // 发绳
+    ctx.beginPath(); ctx.moveTo(-8, -12 + bob); ctx.quadraticCurveTo(-14, -8 + bob, -11, 0 + bob); ctx.stroke(); // 马尾收在脑后偏左，不甩向瞄准侧
+    ctx.fillStyle = '#c94a6a'; ctx.beginPath(); ctx.arc(-9, -10 + bob, 1.8, 0, TAU); ctx.fill(); // 发绳
   } else if (ch.style === 'twintail') {
     ctx.beginPath(); ctx.arc(0, -9 + bob, 11.6, Math.PI * .92, Math.PI * 2.08); ctx.fill();
     for (const sgn of [-1, 1]) { // 双侧马尾
@@ -296,7 +300,7 @@ function drawPlayer(ctx, p, t) {
     ctx.beginPath(); ctx.ellipse(brim, -14.5 + bob, 10, 4.2, 0, Math.PI * .05, Math.PI * .95, true); ctx.fill();
     ctx.fillStyle = shade(ch.hair, 24); ctx.fillRect(-10, -15.5 + bob, 20, 2.4); // 帽带
   }
-  if (!gunFront) drawGun(); // 朝上时枪杆叠在头发之上，永远可见
+  if (!gunFront) drawGun(false); // 朝上时只叠枪杆于头发之上，手臂藏头后不穿脸
   // 眼睛：朝瞄准方向
   const ex = p.aim.x * 2.6, ey = p.aim.y * 1.8;
   ctx.fillStyle = '#fff';
@@ -398,11 +402,13 @@ function drawFx(ctx, g) {
       ctx.beginPath(); ctx.moveTo(f.x1, f.y1); ctx.lineTo(f.x2, f.y2); ctx.stroke();
     } else if (f.type === 'ghost') {
       const gc = CHARS[(f.char == null ? 0 : f.char) % CHARS.length];
-      ctx.globalAlpha = (f.t / 8) * .34;
+      ctx.globalAlpha = (f.t / 8) * .5;
       ctx.fillStyle = gc.suit;
       ctx.beginPath(); ctx.roundRect(f.x - 8, f.y - 8 + 4, 16, 18, 6); ctx.fill();
       ctx.fillStyle = gc.skin;
       ctx.beginPath(); ctx.arc(f.x, f.y - 13 + 4, 7, 0, TAU); ctx.fill();
+      ctx.strokeStyle = gc.gun; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(f.x - 2, f.y + 2); ctx.lineTo(f.x + 14, f.y - 2); ctx.stroke(); // 持枪轮廓
       ctx.globalAlpha = 1;
     } else if (f.type === 'bolt') {
       ctx.strokeStyle = `rgba(255,235,120,${a})`; ctx.lineWidth = 3;
@@ -1159,18 +1165,18 @@ function drawHUD(ctx, g) {
     ctx.fillStyle = '#cbb59a'; ctx.font = 'bold 13px monospace'; ctx.textAlign = 'left';
     ctx.fillText('×' + n, rx + 10, ry + 4);
   });
-  { // 冲刺槽：就绪呼吸亮，冷却画进度弧；附键位标注
-    const rx = 14 + 2 * 40, ry = HUD_H - 12, ready = p.dashCd <= 0;
+  { // 冲刺槽：就绪呼吸亮，冷却画进度弧；附键位标注（半径收紧，环底不越 HUD 下缘）
+    const rx = 14 + 2 * 40, ry = HUD_H - 15, ready = p.dashCd <= 0;
     ctx.save();
     if (!ready) ctx.globalAlpha = .45;
     drawResIcon(ctx, 'dash', rx, ry, g.time);
     ctx.restore();
     if (!ready) {
       ctx.strokeStyle = '#7fb2e8'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(rx, ry, 10.5, -Math.PI / 2, -Math.PI / 2 + TAU * (1 - p.dashCd / p.dashCdMax)); ctx.stroke();
+      ctx.beginPath(); ctx.arc(rx, ry, 9.5, -Math.PI / 2, -Math.PI / 2 + TAU * (1 - p.dashCd / p.dashCdMax)); ctx.stroke();
     } else if (Math.floor(g.time / 24) % 2 === 0) {
       ctx.strokeStyle = 'rgba(127,178,232,.5)'; ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.arc(rx, ry, 11.5, 0, TAU); ctx.stroke();
+      ctx.beginPath(); ctx.arc(rx, ry, 10, 0, TAU); ctx.stroke();
     }
     ctx.fillStyle = '#6b5a48'; ctx.font = '9px monospace'; ctx.textAlign = 'left';
     ctx.fillText(Touch.supported() ? '冲刺' : 'Space', rx + 13, ry + 4);
@@ -1487,6 +1493,18 @@ function drawSidePanel(ctx, g) {
 }
 
 // ── 全层大地图：远超一屏，拖动平移，迷雾随探索揭开，玩家光点实时定位 ──
+function drawSkull(ctx, x, y, s) { // 手绘骷髅（避免 ☠ 字形在部分环境成豆腐块）
+  ctx.save(); ctx.translate(x, y);
+  ctx.fillStyle = '#efe6d2';
+  ctx.beginPath(); ctx.arc(0, -s * .15, s * .7, Math.PI, 0); ctx.rect(-s * .7, -s * .15, s * 1.4, s * .55); ctx.fill();
+  ctx.beginPath(); ctx.roundRect(-s * .45, s * .4, s * .9, s * .35, 2); ctx.fill();
+  ctx.fillStyle = '#241a12';
+  ctx.beginPath(); ctx.arc(-s * .28, -s * .1, s * .18, 0, TAU); ctx.arc(s * .28, -s * .1, s * .18, 0, TAU); ctx.fill();
+  ctx.fillRect(-s * .06, s * .12, s * .12, s * .18);
+  ctx.strokeStyle = '#241a12'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(-s * .2, s * .42); ctx.lineTo(-s * .2, s * .72); ctx.moveTo(s * .05, s * .42); ctx.lineTo(s * .05, s * .72); ctx.moveTo(s * .28, s * .42); ctx.lineTo(s * .28, s * .72); ctx.stroke();
+  ctx.restore();
+}
 function drawFloorMap(ctx, g) {
   const cell = 150, gap = 18, step = cell + gap, GW = 7, GH = 7;
   const mapW = GW * step - gap, mapH = GH * step - gap;
@@ -1538,8 +1556,11 @@ function drawFloorMap(ctx, g) {
     ctx.beginPath(); ctx.roundRect(x, y, cell, cell, 10); ctx.stroke();
     ctx.textAlign = 'center';
     ctx.fillStyle = '#e8dcc0'; ctx.font = `bold ${seen ? 15 : 13}px monospace`;
-    const label = room.type === 'boss' ? '☠ Boss' : room.type === 'treasure' ? '★ 宝物' : room.type === 'shop' ? '$ 商店' : room.type === 'start' ? '入口' : '房 间';
-    ctx.fillText(label, x + cell / 2, y + 30);
+    if (room.type === 'boss') { drawSkull(ctx, x + cell / 2, y + 26, 15); ctx.fillText('Boss', x + cell / 2, y + 52); }
+    else {
+      const label = room.type === 'treasure' ? '★ 宝物' : room.type === 'shop' ? '$ 商店' : room.type === 'start' ? '入口' : '房 间';
+      ctx.fillText(label, x + cell / 2, y + 30);
+    }
     if (seen && room.type === 'normal' && !room.cleared && room.quota) { // 未清房：配额进度实时呈现
       ctx.fillStyle = 'rgba(0,0,0,.45)'; ctx.beginPath(); ctx.roundRect(x + 22, y + cell / 2 - 4, cell - 44, 12, 6); ctx.fill();
       ctx.fillStyle = '#d9a92e'; ctx.beginPath(); ctx.roundRect(x + 22, y + cell / 2 - 4, (cell - 44) * clamp(room.killed / room.quota, 0, 1), 12, 6); ctx.fill();
@@ -1569,8 +1590,15 @@ function drawFloorMap(ctx, g) {
   ctx.strokeStyle = '#b08a3a'; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.roundRect(z.x, z.y, z.w, z.h, 7); ctx.stroke();
   ctx.fillStyle = '#e8c85e'; ctx.font = 'bold 20px monospace'; ctx.textAlign = 'center';
   ctx.fillText('×', z.x + z.w / 2, z.y + 26);
-  ctx.fillStyle = '#8a7360'; ctx.font = '12px monospace'; ctx.textAlign = 'center';
-  ctx.fillText('拖动平移 · 轻点回中 · Tab / Esc 关闭 · ☠Boss ★宝物 $商店 ✓已清 ?未探索 · 颜色越红越危险', CANVAS_W / 2, CANVAS_H - 10);
+  {
+    const legend = '拖动平移 · 轻点回中 · Tab/Esc 关闭 · Boss ★宝物 $商店 ✓已清 ?未探索 · 越红越危险';
+    ctx.font = '12px monospace'; ctx.textAlign = 'center';
+    const lw = ctx.measureText(legend).width + 60;
+    ctx.fillStyle = 'rgba(8,6,5,.9)'; ctx.beginPath(); ctx.roundRect(CANVAS_W / 2 - lw / 2, CANVAS_H - 26, lw, 22, 6); ctx.fill();
+    ctx.fillStyle = '#8a7360';
+    ctx.fillText(legend.replace('Boss', '  Boss'), CANVAS_W / 2, CANVAS_H - 10); // 预留骷髅位
+    drawSkull(ctx, CANVAS_W / 2 - ctx.measureText(legend).width / 2 + 118, CANVAS_H - 16, 8);
+  }
 }
 
 // ── 触屏摇杆 UI ──
@@ -1602,7 +1630,7 @@ function drawTouchUI(ctx, t) {
     ctx.globalAlpha = .8; ctx.strokeStyle = '#7fb2e8';
     ctx.beginPath(); ctx.arc(b.x, b.y, b.r + 4, -Math.PI / 2, -Math.PI / 2 + TAU * (1 - p.dashCd / p.dashCdMax)); ctx.stroke();
   }
-  ctx.globalAlpha = .34;
+  ctx.globalAlpha = .34; ctx.strokeStyle = '#e0d0b8'; // 复位描边色，避免蓝色冷却弧污染暂停/地图/静音按钮
   // 暂停小按钮
   const pb = Touch.pauseBtn || { x: ROOM_W - 56, y: CANVAS_H - 240, r: 22 };
   ctx.beginPath(); ctx.arc(pb.x, pb.y, pb.r, 0, TAU); ctx.stroke();

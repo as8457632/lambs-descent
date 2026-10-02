@@ -510,7 +510,7 @@ function hitWallFloat(room, x, y, r) {
 
 // ── Boss ──
 const BOSSES = [
-  { id: 'gluttony',    arch: 'glutton', name: '暴食肉山', hp: 160, r: 56, cycle: ['spit', 'hop', 'summon'], bs: 2.7 },
+  { id: 'gluttony',    arch: 'glutton', name: '暴食肉山', hp: 128, r: 56, cycle: ['spit', 'hop', 'summon'], bs: 2.7 },
   { id: 'broodmother', arch: 'brood',   name: '铁颚蛛后', hp: 240, r: 50, cycle: ['radial', 'dash', 'summon2', 'spit'], bs: 2.5 },
   { id: 'the_maw',     arch: 'glutton', name: '巨颚装甲车', hp: 290, r: 58, cycle: ['spit', 'radial', 'hop', 'dash', 'summon'], bs: 3.1 },
 ];

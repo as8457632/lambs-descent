@@ -181,7 +181,7 @@ const Touch = {
         return;
       }
       for (const p of pts(e)) {
-        if (Math.hypot(p.x - gbtn.x, p.y - gbtn.y) < gbtn.r + 8) { this.mapTap = true; continue; }
+        if (game.state === 'play' && Math.hypot(p.x - gbtn.x, p.y - gbtn.y) < gbtn.r + 8) { this.mapTap = true; continue; } // 仅战斗态响应，防跨态幻影开图
         if (game.state === 'play') this.startedInPlay.add(p.id); // 战斗中按下的手指，抬起时不得触发菜单确认
         if (Math.hypot(p.x - pbtn.x, p.y - pbtn.y) < pbtn.r + 8) { this.pauseTap = true; continue; }
         if (Math.hypot(p.x - mbtn.x, p.y - mbtn.y) < mbtn.r + 8) { this.muteTap = true; continue; }
@@ -210,7 +210,7 @@ const Touch = {
     const end = e => {
       if (game.mapOpen && this.drag) {
         for (const p of pts(e)) if (p.id === this.drag.id) {
-          if (this.drag.moved < 14) game.mapAuto = true; // 轻点回中
+          if (this.drag.moved < 14) this.menuTap = { x: p.x, y: p.y }; // 轻点交给 main 判 × 关闭 / 否则回中
           this.drag = null;
         }
         if (this.drag && ![...e.changedTouches].some(t => t.identifier === this.drag.id)) this.drag = null;
@@ -242,17 +242,20 @@ const Touch = {
     };
     cv.addEventListener('touchend', end);
     cv.addEventListener('touchcancel', end);
+    // 逻辑坐标换算（含强制横屏旋转逆变换）
+    const toLogical = (clientX, clientY) => {
+      const r = cv.getBoundingClientRect();
+      if (game.rotOn) {
+        const s = r.height / CANVAS_W, cxp = r.left + r.width / 2, cyp = r.top + r.height / 2;
+        return { x: CANVAS_W / 2 + (clientY - cyp) / s, y: CANVAS_H / 2 - (clientX - cxp) / s };
+      }
+      return { x: (clientX - r.left) * (CANVAS_W / r.width), y: (clientY - r.top) * (CANVAS_H / r.height) };
+    };
     // 桌面鼠标点击复用同一套菜单命中区（标题/三选一/工坊/结算）
     cv.addEventListener('mousedown', e => {
       SFX.ensure();
-      const r = cv.getBoundingClientRect();
-      if (game.mapOpen) { this.drag = { x: e.clientX, y: e.clientY, moved: 0 }; return; }
-      if (game.rotOn) {
-        const s = r.height / CANVAS_W, cxp = r.left + r.width / 2, cyp = r.top + r.height / 2;
-        this.menuTap = { x: CANVAS_W / 2 + (e.clientY - cyp) / s, y: CANVAS_H / 2 - (e.clientX - cxp) / s };
-      } else {
-        this.menuTap = { x: (e.clientX - r.left) * (CANVAS_W / r.width), y: (e.clientY - r.top) * (CANVAS_H / r.height) };
-      }
+      if (game.mapOpen) { const q = toLogical(e.clientX, e.clientY); this.drag = { x: e.clientX, y: e.clientY, lx: q.x, ly: q.y, moved: 0 }; return; }
+      this.menuTap = toLogical(e.clientX, e.clientY);
     });
     addEventListener('mousemove', e => {
       if (!game.mapOpen || !this.drag) return;
@@ -262,7 +265,9 @@ const Touch = {
       this.drag.x = e.clientX; this.drag.y = e.clientY; game.mapAuto = false;
     });
     addEventListener('mouseup', () => {
-      if (game.mapOpen && this.drag) { if (this.drag.moved < 8) game.mapAuto = true; this.drag = null; }
+      if (!this.drag) return;
+      if (game.mapOpen && this.drag.moved < 8) this.menuTap = { x: this.drag.lx, y: this.drag.ly }; // 轻点：交给 main 判 × 关闭 / 否则回中
+      this.drag = null; // 无条件清理，杜绝"关图后悬停即平移"的幽灵拖动
     });
   },
   vector(side) {

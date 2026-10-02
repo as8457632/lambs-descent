@@ -17,7 +17,7 @@ const game = {
 function shake(n) { game.shakeAmt = Math.max(game.shakeAmt, n); }
 
 let cv, cx;
-const BUILD = 'v2.0'; // 版本号水印：确认玩家加载的是否为最新构建
+const BUILD = 'v2.1'; // 版本号水印：确认玩家加载的是否为最新构建
 window.__BUILD = BUILD;
 window.DBG_VP = () => ({ build: BUILD, inner: [innerWidth, innerHeight], vv: window.visualViewport ? [Math.round(visualViewport.width), Math.round(visualViewport.height)] : null, dpr: devicePixelRatio, css: [Math.round(cv ? cv.getBoundingClientRect().width : 0), Math.round(cv ? cv.getBoundingClientRect().height : 0)] });
 
@@ -115,7 +115,7 @@ function newRun() {
   game.player = new Player(ROOM_W / 2, ROOM_H / 2);
   game.player.char = Meta.load().char || 0;
   game.particles = []; game.toast = null;
-  game.taughtClear = false; game.taughtWeapon = false; game.lastKiller = null; game.hint = null;
+  game.taughtClear = false; game.taughtWeapon = false; game.taughtDash = false; game.lastKiller = null; game.hint = null;
   // 应用局间永久强化（锻造工坊）
   const m = Meta.load();
   const p = game.player;
@@ -195,7 +195,7 @@ function enterRoom(room, fromDir) {
   }
   createRoomContents(room, game.floorNum, ex, ey);
   game.player.x = ex; game.player.y = ey;
-  game.player.q = [];
+  game.player.q = []; game.player.dashing = 0; // 跨房不清位移会带进新房"幽灵冲刺" 
 
   if (!room.cleared && room.enemies.length > 0) {
     SFX.play('doorOpen');
@@ -220,7 +220,7 @@ function update() {
     const mt = Touch.menuTap; Touch.menuTap = null;
     const m = Meta.load();
     for (let i = 0; i < CHARS.length; i++) {
-      if (Input.pressed('Digit' + (i + 1)) || (mt && inZone(mt, charZones()[i]))) { m.char = i; Meta.save(); SFX.play('coin'); }
+      if (Input.pressed('Digit' + (i + 1)) || (mt && inZone(mt, charZones()[i]))) { m.char = i; Meta.save(); SFX.play('coin'); Touch.tapped = false; } // 点卡=只选人，不触发"点屏开局"
     }
     if (Input.pressed('Enter')) newRun();
     else if (Input.pressed('KeyS')) { game.workshopFrom = 'title'; game.state = 'workshop'; }
@@ -306,9 +306,9 @@ function update() {
   room.tears = room.tears.filter(t => !t.dead);
   room.pickups = room.pickups.filter(k => !k.dead);
 
-  // 清房判定
+  // 清房判定：有配额的房间必须杀满，波次间隙"假清空"不再开门
   if (!room.cleared && room.enemies.length === 0 && (!room.boss || room.boss.dead)) {
-    if (room.hasEnemiesPlanned || room.boss) onRoomCleared(room);
+    if ((room.hasEnemiesPlanned || room.boss) && (!room.quota || room.killed >= room.quota)) onRoomCleared(room);
   }
 
   // 粒子与武器特效
@@ -351,7 +351,7 @@ function handleCollisions(room) {
         room.boss.hit(tr.dmg); hit = true;
       }
       if (!hit) for (const o of room.props) {
-        if (!o.dead && o.kind === 'poop' && dist2(tr.x, tr.y, o.x, o.y) < tr.r + 14) {
+        if (!o.dead && o.kind === 'junk' && dist2(tr.x, tr.y, o.x, o.y) < tr.r + 14) {
           damageProp(room, o, tr.dmg); hit = true; break;
         }
       }
@@ -449,7 +449,7 @@ function draw() {
   for (const pk of game.cur.pickups) if (!pk.dead) drawPickup(cx, pk, game.time);
   for (const e of game.cur.enemies) drawEnemy(cx, e, game.time);
   if (game.cur.boss && !game.cur.boss.dead) drawBoss(cx, game.cur.boss, game.time);
-  if (!(game.state === 'dead')) drawPlayer(cx, game.player, game.time);
+  if (!(game.state === 'dead' || game.state === 'win')) drawPlayer(cx, game.player, game.time);
   for (const tr of game.cur.tears) drawTear(cx, tr);
   drawFx(cx, game);
   for (const q of game.particles) {
@@ -461,7 +461,7 @@ function draw() {
   cx.restore();
 
   drawHUD(cx, game);
-  if (game.state === 'play' && cv.getBoundingClientRect().width < 700) { // 画面过小：自救指引 + 视口自检数据
+  if (game.state === 'play' && !game.rotMode && cv.getBoundingClientRect().width < 700) { // 画面过小：自救指引 + 视口自检数据
     cx.fillStyle = 'rgba(120,20,20,.88)'; cx.fillRect(ROOM_W / 2 - 258, HUD_H + 2, 516, 36);
     cx.strokeStyle = '#e8c85e'; cx.lineWidth = 1; cx.strokeRect(ROOM_W / 2 - 258, HUD_H + 2, 516, 36);
     cx.fillStyle = '#ffe0c0'; cx.font = 'bold 13px monospace'; cx.textAlign = 'center';
@@ -489,17 +489,17 @@ function draw() {
     cx.fillStyle = `rgba(180,20,20,${(game.flashT / 14) * .22})`;
     cx.fillRect(0, 0, CANVAS_W, CANVAS_H);
   }
-  if ((Touch.supported() || Touch.active) && game.state === 'play' && !game.paused) drawTouchUI(cx, game.time);
-
-  if (game.state === 'dead') drawDeathScreen();
-  if (game.state === 'win') drawWinScreen();
   if (game.paused && game.state === 'play') {
     cx.fillStyle = 'rgba(0,0,0,.55)'; cx.fillRect(0, 0, CANVAS_W, CANVAS_H);
     cx.fillStyle = '#d8cba8'; cx.font = 'bold 34px monospace'; cx.textAlign = 'center';
     cx.fillText('暂停', ROOM_W / 2, CANVAS_H / 2);
     cx.font = '14px monospace'; cx.fillStyle = '#a8937c';
-    cx.fillText(Touch.supported() ? '点右上角 ‖ 按钮继续' : '按 P 继续', ROOM_W / 2, CANVAS_H / 2 + 30);
+    cx.fillText(Touch.supported() ? '点右下 ‖ 按钮继续' : '按 P 继续', ROOM_W / 2, CANVAS_H / 2 + 30);
   }
+  if ((Touch.supported() || Touch.active) && game.state === 'play') drawTouchUI(cx, game.time);
+
+  if (game.state === 'dead') drawDeathScreen();
+  if (game.state === 'win') drawWinScreen();
   // 未清房锁门提示
   if (game.state === 'play' && !game.cur.cleared && game.cur.enemies.length === 0 && !game.cur.boss && !game.cur.hasEnemiesPlanned) {
     // 无怪房间（安全房）不需要提示
@@ -561,7 +561,7 @@ function drawTitle() {
 
   // 角色选择行（4 个可选干员，纯外观；点击/数字键 1-4 选择）
   ctx.fillStyle = '#8a7a66'; ctx.font = '12px monospace'; ctx.textAlign = 'center';
-  ctx.fillText('选择干员', ROOM_W / 2, 236);
+  ctx.fillText('选择干员（1-4 键或点击 · 纯外观差异）', ROOM_W / 2, 236);
   const cz = charZones();
   CHARS.forEach((ch, i) => {
     const z = cz[i], sel = (Meta.load().char || 0) === i;
@@ -584,10 +584,9 @@ function drawTitle() {
   // 本局主题预告（随机于开局）
   ctx.fillStyle = '#5a6472'; ctx.font = '12px monospace'; ctx.textAlign = 'center';
   ctx.fillText('本局行动区域随机 · 逐层深入解救人质', ROOM_W / 2, 366);
-  const fly = { cfg: ETYPE.fly, x: ROOM_W / 2 + Math.cos(t * .04) * 150, y: 250 + Math.sin(t * .04) * 40, r: 12, flash: 0, spawnT: 0 };
-  drawEnemy(ctx, fly, t);
-  const fly2 = { cfg: ETYPE.attackfly, x: ROOM_W / 2 + Math.cos(t * .05 + 3) * 190, y: 300 + Math.sin(t * .03 + 2) * 30, r: 11, flash: 0, spawnT: 0 };
-  drawEnemy(ctx, fly2, t);
+  const fly = { cfg: ETYPE.fly, x: ROOM_W / 2 + Math.cos(t * .04) * 150, y: 205 + Math.sin(t * .04) * 18, r: 12, flash: 0, spawnT: 0 };
+  const fly2 = { cfg: ETYPE.attackfly, x: ROOM_W / 2 + Math.cos(t * .05 + 3) * 190, y: 222 + Math.sin(t * .03 + 2) * 14, r: 11, flash: 0, spawnT: 0 };
+  drawEnemy(ctx, fly, t); drawEnemy(ctx, fly2, t);
 
   // 提示
   if (Math.floor(t / 32) % 2 === 0) {

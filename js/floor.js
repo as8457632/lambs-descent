@@ -170,15 +170,15 @@ function createRoomContents(room, floorNum, entryX, entryY) {
     }
     // 敌人
     const pools = [
-      ['fly', 'fly', 'attackfly', 'gaper', 'pooter', 'spider', 'spreader', 'bat', 'mushroom'],
+      ['fly', 'fly', 'attackfly', 'gaper', 'gaper', 'spider', 'bat', 'hopper'],
       ['fly', 'attackfly', 'attackfly', 'gaper', 'pooter', 'spider', 'hopper', 'splitter', 'turret', 'ghost', 'bone', 'eye', 'bat'],
       ['attackfly', 'attackfly', 'gaper', 'gaper', 'pooter', 'spider', 'hopper', 'splitter', 'splitter', 'turret', 'ghost', 'spreader', 'bone', 'eye', 'mushroom'],
     ];
     // 难度门控：远端房间用更强怪池；入口侧房间降血量，避免开局撞脸劝退
-    const tier = clamp(floorNum - 1 + ((room.dist || 0) >= 4 ? 1 : 0), 0, 2);
-    const hpMul = 0.72 + 0.09 * clamp(room.dist || 0, 0, 4);
+    const tier = clamp(floorNum - 1 + ((room.dist || 0) >= 3 ? 1 : 0), 0, 2);
+    const hpMul = 0.65 + 0.12 * clamp(room.dist || 0, 0, 4);
     // 配额制：需击杀的总数随层数与已玩时长增长；初始只刷一小批，后续由波次补刷
-    room.quota = 7 + 4 * floorNum + Math.min(5, Math.floor(game.runTime / 3600)); // 配额随层数+分钟增长，封顶+5防无限肝
+    room.quota = Math.round((5 + 3 * floorNum + Math.min(5, Math.floor(game.runTime / 3600))) * (0.55 + 0.15 * clamp(room.dist || 0, 0, 4))); // 入口房配额减半起步，深处房才要杀满
     room.killed = 0;
     room.spawnT = Math.max(50, 130 - 15 * floorNum);
     room.tier = tier; room.hpMul = hpMul;

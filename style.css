@@ -83,3 +83,5 @@ body {
   box-shadow: none; border-radius: 0;
 }
 #game.rot:fullscreen { transform: translate(-50%, -50%) rotate(90deg); }
+
+#fsbtn { z-index: 40; position: relative; } /* 强制横屏时按钮不被 fixed 画布盖住 */

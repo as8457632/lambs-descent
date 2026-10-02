@@ -77,13 +77,13 @@ function nearestEnemy(room, x, y) {
 const UPGRADES = [
   { id: 'spread',  name: '散弹之芯', desc: '弹数 +1（每发伤害 -10%）', max: 3, c: '#e8a83a', glyph: '散',
     apply(p) { p.shotsPerDir++; p.dmg *= .9; } },
-  { id: 'dmg',     name: '磨尖泪刃', desc: '伤害 +15%', max: 5, c: '#c94a4a', glyph: '刃',
+  { id: 'dmg',     name: '空尖弹', desc: '伤害 +15%', max: 5, c: '#c94a4a', glyph: '刃',
     apply(p) { p.dmg *= 1.15; } },
   { id: 'rate',    name: '急促呼吸', desc: '射击间隔 -2 帧', max: 4, c: '#8ecbff', glyph: '急',
     apply(p) { p.fireDelay = Math.max(5, p.fireDelay - 2); } },
   { id: 'boots',   name: '鼠捷之靴', desc: '移动速度 +0.3', max: 3, c: '#7fae5a', glyph: '捷',
     apply(p) { p.speed += .3; } },
-  { id: 'pierce',  name: '贯穿之刺', desc: '眼泪穿透 +1 个敌人', max: 2, c: '#b8c4cc', glyph: '穿',
+  { id: 'pierce',  name: '贯穿之刺', desc: '子弹穿透 +1 个敌人', max: 2, c: '#b8c4cc', glyph: '穿',
     apply(p) { p.pierce++; } },
   { id: 'homing',  name: '磁引之核', desc: '眼泪追踪敌人', max: 1, c: '#7f7fe8', glyph: '磁',
     apply(p) { p.homing = true; } },
@@ -225,6 +225,7 @@ class Player {
       this.dashing = 13; this.dashVx = dx / l * 9.2; this.dashVy = dy / l * 9.2;
       this.dashCd = this.dashCdMax;
       SFX.play('dash');
+      if (!game.taughtDash) { game.taughtDash = true; game.hint = { text: '冲刺有无敌帧，还能撞开箱子和杂物', t: 200 }; }
     } else if (Touch.dashTap) Touch.dashTap = false;
     if (this.dashing > 0) {
       this.dashing--;
@@ -235,7 +236,7 @@ class Player {
         if (!pk.dead && pk.kind === 'chest' && dist2(pk.x, pk.y, this.x, this.y) < pk.r + this.r) openChest(room, pk);
       for (const o of room.props)
         if (!o.dead && dist2(o.x, o.y, this.x, this.y) < 20 + this.r) damageProp(room, o, 99);
-      if (this.dashing === 0) this.inv = Math.max(this.inv, 8); // 尾帧保护，衔接脱离
+      if (this.dashing === 0) this.inv = Math.max(this.inv, 3); // 尾帧仅 3 帧缓冲，配合 CD 防永无敌
     } else if (this.moving) { this.anim++; moveCircle(this, mx * this.speed, my * this.speed, room); }
     if (this.dashCd > 0) this.dashCd--;
     // 射击（方向键优先，其次右摇杆）：按当前武器分派弹道
@@ -255,8 +256,8 @@ class Player {
         } else if (w.id === 'flame') {
           const n = 3 + Math.floor(lvl / 2), base = Math.atan2(uy, ux);
           for (let i = 0; i < n; i++) {
-            const a = base + (i - (n - 1) / 2) * .22 + rand(-.05, .05);
-            const sp = this.tearSpeed * rand(.72, .95);
+            const a = base + (i - (n - 1) / 2) * .17 + rand(-.04, .04);
+            const sp = this.tearSpeed * rand(.8, .98);
             room.tears.push(new Tear(this.x + Math.cos(a) * 14, this.y + Math.sin(a) * 14,
               Math.cos(a) * sp, Math.sin(a) * sp, weaponDmg(this, w), 6.5 + lvl * .8, true,
               { life: 24 + lvl * 3, colorKey: 'flame' }));
@@ -511,7 +512,7 @@ function hitWallFloat(room, x, y, r) {
 const BOSSES = [
   { id: 'gluttony',    arch: 'glutton', name: '暴食肉山', hp: 160, r: 56, cycle: ['spit', 'hop', 'summon'], bs: 2.7 },
   { id: 'broodmother', arch: 'brood',   name: '铁颚蛛后', hp: 240, r: 50, cycle: ['radial', 'dash', 'summon2', 'spit'], bs: 2.5 },
-  { id: 'the_maw',     arch: 'glutton', name: '深渊之颚', hp: 290, r: 58, cycle: ['spit', 'radial', 'hop', 'dash', 'summon'], bs: 3.1 },
+  { id: 'the_maw',     arch: 'glutton', name: '巨颚装甲车', hp: 290, r: 58, cycle: ['spit', 'radial', 'hop', 'dash', 'summon'], bs: 3.1 },
 ];
 
 class Boss {
@@ -533,8 +534,8 @@ class Boss {
     const bs = this.cfg.bs * (this.phase2 ? 1.15 : 1);
     switch (this.act) {
       case 'spit': this.actT = 22; this.volley = this.phase2 ? 2 : 1; break;
-      case 'hop':
-        this.actT = 20;
+      case 'hop': // 先亮落点红圈 16 帧再跳，杜绝零预警必中
+        this.teleKind = 'hop'; this.act = 'tele'; this.actT = 16;
         this.hopFrom = { x: this.x, y: this.y };
         this.hopTo = { x: clamp(p.x, TILE * 2, ROOM_W - TILE * 2), y: clamp(p.y, TILE * 2, ROOM_H - TILE * 2) };
         break;
@@ -542,7 +543,7 @@ class Boss {
       case 'dash': // 先锁定方向原地蓄力预警，再真正冲锋（玩家有躲避窗口）
         if (Math.abs(dx) > Math.abs(dy)) { this.vx = Math.sign(dx) * 8.2; this.vy = 0; }
         else { this.vy = Math.sign(dy) * 8.2; this.vx = 0; }
-        this.act = 'tele'; this.actT = 30;
+        this.teleKind = 'dash'; this.act = 'tele'; this.actT = 30;
         break;
       case 'summon': { this.actT = 30;
         if (game.cur.enemies.length < 10) { // 随从上限，防滚雪球
@@ -594,9 +595,13 @@ class Boss {
     }
     this.actT -= 1;
     switch (this.act) {
-      case 'tele': // 蓄力预警：定身不动，渲染层画出冲刺路径危险带
+      case 'tele': // 蓄力预警：定身不动，渲染层按 teleKind 画危险带/落点圈
         if (this.t % 5 === 0) spawnParticles(room, this.x + rand(-this.r, this.r) * .5, this.y + rand(-this.r, this.r) * .5, 2, '#ffcf5e', 2);
-        if (this.actT <= 0) { this.act = 'dash'; this.actT = 34; SFX.play('bossRoar'); shake(5); }
+        if (this.actT <= 0) {
+          if (this.teleKind === 'hop') { this.act = 'hop'; this.actT = 20; }
+          else { this.act = 'dash'; this.actT = 34; shake(5); }
+          SFX.play('bossRoar');
+        }
         break;
       case 'spit':
         if (this.actT <= 0) {
@@ -696,7 +701,7 @@ class Pickup {
           break;
         case 'chest':
           if (p.keys > 0) { p.keys--; openChest(room, this); }
-          else if (this.denyCd <= 0) { SFX.play('deny'); this.denyCd = 40; game.hint = { text: '需要一把钥匙（或蓄力冲刺撞开）', t: 80 }; }
+          else if (this.denyCd <= 0) { SFX.play('deny'); this.denyCd = 40; game.hint = { text: '需要一把钥匙（或冲刺撞开）', t: 80 }; }
           break;
       }
     }
@@ -725,8 +730,8 @@ function openChest(room, c) {
 
 // ── 武器系统：四种枪，拾取换装/升级（重复拾取 +1 级，最高 5 级）──
 const WEAPONS = {
-  tear:  { id: 'tear',  name: '泪弹枪', c: '#9cc4ee', glyph: '泪', cd: 13, mult: 1,   max: 5, desc: '均衡的基础火力' },
-  laser: { id: 'laser', name: '激光枪', c: '#ff5f5f', glyph: '激', cd: 24, mult: 3.0, max: 5, desc: '贯穿一切的光束' },
+  tear:  { id: 'tear',  name: '制式冲锋枪', c: '#9cc4ee', glyph: '枪', cd: 13, mult: 1,   max: 5, desc: '均衡的基础火力' },
+  laser: { id: 'laser', name: '激光枪', c: '#ff5f5f', glyph: '激', cd: 30, mult: 2.8, max: 5, desc: '贯穿一切的光束' },
   light: { id: 'light', name: '闪电枪', c: '#ffe066', glyph: '雷', cd: 22, mult: 1.8, max: 5, desc: '在敌人间跳跃的电弧' },
   flame: { id: 'flame', name: '火焰枪', c: '#ff9040', glyph: '焰', cd: 11, mult: .5,  max: 5, desc: '近距扇形烈焰，以量取胜' },
 };
@@ -734,9 +739,9 @@ function weaponDmg(p, w) { return p.dmg * w.mult * (1 + .35 * (p.weapon.lvl - 1)
 
 // ── 被动道具池 ──
 const ITEMS = [
-  { id: 'eye3',    name: '第三只眼', desc: '朝同一方向连射三滴眼泪', color: '#8ecbff',
+  { id: 'eye3',    name: '第三只眼', desc: '朝同一方向连射三发', color: '#8ecbff',
     apply(p) { p.shotsPerDir = Math.max(p.shotsPerDir, 3); } },
-  { id: 'big',     name: '巨泪', desc: '眼泪变大 伤害+2', color: '#7fb2e8',
+  { id: 'big',     name: '巨泪', desc: '子弹变大 伤害+2', color: '#7fb2e8',
     apply(p) { p.tearR += 4.5; p.dmg += 2; } },
   { id: 'speed',   name: '疾行靴', desc: '移动速度提升', color: '#d9a92e',
     apply(p) { p.speed += .75; } },
@@ -744,7 +749,7 @@ const ITEMS = [
     apply(p) { p.fireDelay = Math.max(6, p.fireDelay - 4); } },
   { id: 'blood',   name: '血之契约', desc: '伤害+3', color: '#c4303a',
     apply(p) { p.dmg += 3; } },
-  { id: 'homing',  name: '追魂核', desc: '眼泪会追踪敌人', color: '#7f7fe8',
+  { id: 'homing',  name: '追魂核', desc: '子弹追踪敌人', color: '#7f7fe8',
     apply(p) { p.homing = true; } },
   { id: 'wings',   name: '褪色翅', desc: '移速+ 射程+', color: '#b8d8c9',
     apply(p) { p.speed += .45; p.tearLife += 24; } },
@@ -752,7 +757,7 @@ const ITEMS = [
     apply(p) { p.maxHearts += 2; p.hearts = p.maxHearts; } },
   { id: 'polaris', name: '苍白之星', desc: '拾取范围大增 回复1心', color: '#e8e0c9',
     apply(p) { p.pickupMag += 55; p.heal(2); } },
-  { id: 'awl',     name: '腐烂锥', desc: '眼泪可穿透1个敌人', color: '#b8c4cc',
+  { id: 'awl',     name: '腐烂锥', desc: '子弹可穿透1个敌人', color: '#b8c4cc',
     apply(p) { p.pierce += 1; } },
   { id: 'fang',    name: '蛀牙', desc: '伤害+2.2 移速略降', color: '#d9d0c0',
     apply(p) { p.dmg += 2.2; p.speed = Math.max(2.4, p.speed - .25); } },

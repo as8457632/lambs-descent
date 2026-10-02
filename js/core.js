@@ -84,7 +84,7 @@ const THEMES = [
   { name: '研究所', floors: ['实验区', '冷冻舱', '核心区'], hue: 180, sat: 16,
     solids: [{ art: 'table', c: '#a8b8bc' }, { art: 'dome', c: '#3a7a8a' }, { art: 'cyl', c: '#5a6068' }], junk: { art: 'pile', c: '#7a8a88' } },
   { name: '港口',   floors: ['码头', '货轮船舱', '灯塔'], hue: 205, sat: 22,
-    solids: [{ art: 'box', c: '#a84a3a' }, { art: 'barrel', c: '#7a6a4a' }, { art: 'column', c: '#4a5258' }], junk: { art: 'barrel', c: '#6a5a3a' } },
+    solids: [{ art: 'box', c: '#a84a3a' }, { art: 'barrel', c: '#7a6a4a' }, { art: 'column', c: '#4a5258' }], junk: { art: 'pile', c: '#6a5a3a' } },
 ];
 function themePal(th, fn) {
   const h = th.hue + (fn - 2) * 14, s = th.sat;
@@ -134,7 +134,7 @@ const META_UPS = [
   { id: 'hp',     name: '不灭躯壳', desc: '初始心之上限 +1 / 级', cost: [80, 200, 420],  max: 3, c: '#c4303a' },
   { id: 'spd',    name: '风之步',   desc: '初始移速 +0.15 / 级',  cost: [60, 150, 320],  max: 3, c: '#7fae5a' },
   { id: 'coin',   name: '开运之手', desc: '初始金币 +3 / 级',     cost: [50, 120, 260],  max: 3, c: '#e8c85e' },
-  { id: 'dash',   name: '疾风核心', desc: '冲刺冷却 -10 帧 / 级',   cost: [60, 180],       max: 2, c: '#7fb2e8' },
+  { id: 'dash',   name: '疾风核心', desc: '冲刺冷却 -0.17 秒 / 级',   cost: [60, 180],       max: 2, c: '#7fb2e8' },
   { id: 'revive', name: '亡者残响', desc: '每局死亡时原地复活一次（2心起步）', cost: [500], max: 1, c: '#b093e8' },
 ];
 

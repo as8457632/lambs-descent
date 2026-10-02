@@ -62,7 +62,7 @@ body {
 :fullscreen #help, :-webkit-full-screen #help,
 :fullscreen #rotate, :-webkit-full-screen #rotate,
 :fullscreen #fsbtn, :-webkit-full-screen #fsbtn { display: none !important; }
-:fullscreen #game, :-webkit-full-screen #game {
+:fullscreen #game:not(.rot), :-webkit-full-screen #game:not(.rot) {
   box-shadow: none; border-radius: 0;
 }
 #help {
@@ -74,15 +74,15 @@ body {
 }
 #help b { color: #8a7360; }
 
-/* 强制横屏：竖屏设备把画布旋转90°铺满，配合 Touch 坐标逆变换实现"假横屏" */
-#game.rot {
+/* 强制横屏：竖屏设备把画布旋转90°铺满，配合 Touch 坐标逆变换实现"假横屏" */#game.rot {
   position: fixed;
-  left: 50%; top: 50%;
-  transform: translate(-50%, -50%) rotate(90deg);
+  /* left/top 由 JS 显式算好像素锚点，transform 绕左上角旋转 —— 不再依赖百分比，杜绝 vw/dvh/全屏 UA 样式干扰 */
+  transform-origin: 0 0;
+  transform: rotate(90deg) translateY(-100%);
   z-index: 10;
   box-shadow: none; border-radius: 0;
+  margin: 0;
 }
-#game.rot:fullscreen { transform: translate(-50%, -50%) rotate(90deg); }
 
 #fsbtn { z-index: 40; position: relative; } /* 强制横屏时按钮不被 fixed 画布盖住 */
 

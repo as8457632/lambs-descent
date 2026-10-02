@@ -159,7 +159,7 @@ const Touch = {
     const mbtn = this.muteBtn = { x: ROOM_W - 56, y: CANVAS_H - 302, r: 20 };
     const pts = e => {
       const r = cv.getBoundingClientRect();
-      if (game.rotMode) { // CSS rotate(90deg)：屏幕(y向下) → 画布逻辑坐标的逆旋转
+      if (game.rotOn) { // CSS rotate(90deg)：屏幕(y向下) → 画布逻辑坐标的逆旋转
         const s = r.height / CANVAS_W, cxp = r.left + r.width / 2, cyp = r.top + r.height / 2;
         return [...e.changedTouches].map(t => ({
           id: t.identifier,
@@ -201,7 +201,7 @@ const Touch = {
         id: t.identifier, x: 0, y: 0
       })); // 仍在屏上的手指，用于摇杆移交
       const r = cv.getBoundingClientRect();
-      if (game.rotMode) {
+      if (game.rotOn) {
         const s = r.height / CANVAS_W, cxp = r.left + r.width / 2, cyp = r.top + r.height / 2;
         [...e.touches].forEach((t, i) => { alive[i].x = CANVAS_W / 2 + (t.clientY - cyp) / s; alive[i].y = CANVAS_H / 2 - (t.clientX - cxp) / s; });
       } else {
@@ -223,7 +223,7 @@ const Touch = {
     cv.addEventListener('mousedown', e => {
       SFX.ensure();
       const r = cv.getBoundingClientRect();
-      if (game.rotMode) {
+      if (game.rotOn) {
         const s = r.height / CANVAS_W, cxp = r.left + r.width / 2, cyp = r.top + r.height / 2;
         this.menuTap = { x: CANVAS_W / 2 + (e.clientY - cyp) / s, y: CANVAS_H / 2 - (e.clientX - cxp) / s };
       } else {

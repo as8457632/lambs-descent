@@ -17,7 +17,7 @@ const game = {
 function shake(n) { game.shakeAmt = Math.max(game.shakeAmt, n); }
 
 let cv, cx;
-const BUILD = 'v2.2'; // 版本号水印：确认玩家加载的是否为最新构建
+const BUILD = 'v2.3'; // 版本号水印：确认玩家加载的是否为最新构建
 window.__BUILD = BUILD;
 window.DBG_VP = () => ({ build: BUILD, inner: [innerWidth, innerHeight], vv: window.visualViewport ? [Math.round(visualViewport.width), Math.round(visualViewport.height)] : null, dpr: devicePixelRatio, css: [Math.round(cv ? cv.getBoundingClientRect().width : 0), Math.round(cv ? cv.getBoundingClientRect().height : 0)] });
 
@@ -36,12 +36,20 @@ function boot() {
     // visualViewport 在捏合缩放/平板桌面模式怪癖下可能远小于布局视口 → 取两者较大值，画布永不被压成小方块
     const w = Math.max(vv ? vv.width : 0, window.innerWidth || 0) || CANVAS_W;
     const h = Math.max(vv ? vv.height : 0, window.innerHeight || 0) || CANVAS_H;
-    // 强制横屏：竖屏里把画布 CSS 旋转90°，此时 CANVAS_W 沿屏幕纵向铺放
-    const s = game.rotMode ? Math.min(h / CANVAS_W, w / CANVAS_H) : Math.min(w / CANVAS_W, h / CANVAS_H);
+    // 强制横屏：仅竖屏时旋转；用户真把设备转过来了就自动转回正常布局
+    const rot = !!game.rotMode && h > w;
+    game.rotOn = rot;
+    cv.classList.toggle('rot', rot);
+    document.body.classList.toggle('rot', rot);
+    const s = rot ? Math.min(h / CANVAS_W, w / CANVAS_H) : Math.min(w / CANVAS_W, h / CANVAS_H);
     game.rotScale = s;
     const cw = Math.floor(CANVAS_W * s) + 'px', chh = Math.floor(CANVAS_H * s) + 'px';
     if (cv.style.width !== cw) cv.style.width = cw;
     if (cv.style.height !== chh) cv.style.height = chh;
+    if (rot) { // 确定性居中锚点：旋转后包围盒 = (CANVAS_H*s)宽 × (CANVAS_W*s)高
+      cv.style.left = Math.round((w - CANVAS_H * s) / 2) + 'px';
+      cv.style.top = Math.round((h - CANVAS_W * s) / 2) + 'px';
+    } else { cv.style.left = ''; cv.style.top = ''; }
     game.fitScale = s;
     const fsb = document.getElementById('fsbtn');
     if (fsb) {

@@ -4,6 +4,7 @@ html, body {
   background: #0a0808;
   height: 100%;
   touch-action: none; /* 画布外的黑边也不允许捏合/双击缩放到页面 */
+  overscroll-behavior: none; /* 禁下拉刷新/边界回弹（微信 H5 常见误触） */
 }
 body {
   display: flex;
@@ -11,6 +12,7 @@ body {
   justify-content: center;
   min-height: 100vh;
   font-family: "Courier New", monospace;
+  -webkit-touch-callout: none; /* iOS 长按不弹"存储图像"菜单 */
 }
 #wrap { text-align: center; }
 #game {
@@ -30,11 +32,11 @@ body {
   #help { display: none; }
   #game { box-shadow: none; border-radius: 0; }
 }
+#help .tb { display: none; } /* 默认规则必须排在 coarse 媒体查询之前，否则手机提示被同权重覆盖 */
 @media (pointer: coarse) {
   #help .kb { display: none; }
   #help .tb { display: block; }
 }
-#help .tb { display: none; }
 #rotate {
   display: none;
   color: #8a7360; background: rgba(30,20,14,.85);
@@ -86,11 +88,13 @@ body {
 
 #fsbtn { z-index: 40; position: relative; } /* 强制横屏时按钮不被 fixed 画布盖住 */
 
-/* 强制横屏中：退出按钮贴屏幕底缘居中，浮在旋转画布之上，不再悬在战场中间 */
+/* 强制横屏中：退出按钮贴屏幕左上角小尺寸（=画布 HUD 角），不压战场与配额条 */
 body.rot #fsbtn {
   position: fixed;
-  bottom: 14px; left: 50%;
-  transform: translateX(-50%);
+  top: calc(env(safe-area-inset-top, 0px) + 6px);
+  left: calc(env(safe-area-inset-left, 0px) + 8px);
+  bottom: auto; transform: none;
+  font-size: 12px; padding: 6px 12px;
   z-index: 60;
   display: inline-block;
 }

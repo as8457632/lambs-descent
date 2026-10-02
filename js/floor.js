@@ -121,7 +121,7 @@ function roomCenterFree(room, tx, ty) {
     const [dx, dy] = DOOR_CELL[d];
     if (Math.abs(tx - dx) <= 1 && Math.abs(ty - dy) <= 1) return false;
   }
-  if (tx === 7 && ty === 4) return false;
+  if (tx === 22 && ty === 7) return false;
   return true;
 }
 
@@ -131,38 +131,38 @@ function createRoomContents(room, floorNum, entryX, entryY) {
   room.generated = true;
 
   const pal = themePal(game.theme || THEMES[0], floorNum);
-  const stainN = randi(10, 16);
+  const stainN = IS_MOBILE ? randi(14, 22) : randi(30, 48); // 手机端减装饰保帧率
   for (let i = 0; i < stainN; i++) {
     room.stains.push({
-      x: rand(TILE * 1.5, ROOM_W - TILE * 1.5),
-      y: rand(TILE * 1.5, ROOM_H - TILE * 1.5),
+      x: rand(TILE * 1.5, WORLD_W - TILE * 1.5),
+      y: rand(TILE * 1.5, WORLD_H - TILE * 1.5),
       r: rand(10, 46), a: rand(0, TAU), c: pal.stain
     });
   }
   // 颗粒噪点：打散棋盘网格
   room.grains = [];
-  for (let i = 0; i < 34; i++) {
+  for (let i = 0; i < 100; i++) {
     room.grains.push({
-      x: rand(TILE, ROOM_W - TILE), y: rand(TILE, ROOM_H - TILE),
+      x: rand(TILE, WORLD_W - TILE), y: rand(TILE, WORLD_H - TILE),
       r: rand(1, 2.6),
       c: Math.random() < .5 ? 'rgba(255,240,220,.045)' : 'rgba(0,0,0,.10)'
     });
   }
 
-  // 主题障碍（占格碰撞不变，外观随本局主题）
+  // 主题障碍（占格碰撞不变，外观随本局主题；密度按 3 屏面积放大）
   const theme = game.theme || THEMES[0];
-  const rockN = room.type === 'boss' ? randi(1, 3) : room.type === 'shop' ? randi(0, 2) : randi(3, 7);
+  const rockN = room.type === 'boss' ? randi(3, 6) : room.type === 'shop' ? randi(1, 3) : randi(10, 18);
   for (let i = 0; i < rockN; i++) {
     const tx = randi(2, GRID_W - 3), ty = randi(2, GRID_H - 3);
     if (!roomCenterFree(room, tx, ty) || room.rocks.has(tx + ',' + ty)) continue;
-    if (room.type === 'shop' && ty === 4) continue; // 货架行留空
+    if (room.type === 'shop' && ty === 7) continue; // 货架行留空
     if (dist2(tx * TILE + 24, ty * TILE + 24, entryX, entryY) < 90) continue;
-    if (room.type === 'boss' && dist2(tx * TILE, ty * TILE, ROOM_W / 2, ROOM_H / 2) < 120) continue;
+    if (room.type === 'boss' && dist2(tx * TILE, ty * TILE, WORLD_W / 2, WORLD_H / 2) < 160) continue;
     room.rocks.set(tx + ',' + ty, { x: tx * TILE + 24, y: ty * TILE + 24, seed: randi(0, 3), sp: choice(theme.solids) });
   }
 
   if (room.type === 'normal') {
-    const poopN = randi(0, 2);
+    const poopN = randi(2, 5);
     for (let i = 0; i < poopN; i++) {
       const tx = randi(2, GRID_W - 3), ty = randi(2, GRID_H - 3);
       if (!roomCenterFree(room, tx, ty) || room.rocks.has(tx + ',' + ty)) continue;
@@ -176,22 +176,22 @@ function createRoomContents(room, floorNum, entryX, entryY) {
     ];
     // 难度门控：远端房间用更强怪池；入口侧房间降血量，避免开局撞脸劝退
     const tier = clamp(floorNum - 1 + ((room.dist || 0) >= 3 ? 1 : 0), 0, 2);
-    const hpMul = 0.65 + 0.12 * clamp(room.dist || 0, 0, 4);
-    // 配额制：需击杀的总数随层数与已玩时长增长；初始只刷一小批，后续由波次补刷
-    room.quota = Math.round((5 + 3 * floorNum + Math.min(5, Math.floor(game.runTime / 3600))) * (0.55 + 0.15 * clamp(room.dist || 0, 0, 4))); // 入口房配额减半起步，深处房才要杀满
+    const hpMul = 0.55 + 0.12 * clamp(room.dist || 0, 0, 4);
+    // 配额制：3 屏大房间怪量翻倍；初始刷一批，波次补刷，杀满配额后残敌必须全清
+    room.quota = Math.round((12 + 7 * floorNum + Math.min(12, Math.floor(game.runTime / 3600) * 2)) * (0.55 + 0.15 * clamp(room.dist || 0, 0, 4)));
     room.killed = 0;
     room.spawnT = Math.max(50, 130 - 15 * floorNum);
     room.tier = tier; room.hpMul = hpMul;
-    const initial = Math.min(room.quota, 2 + floorNum + randi(0, 2));
+    const initial = Math.min(room.quota, 4 + 2 * floorNum + randi(0, 3));
     for (let i = 0; i < initial; i++) {
       let x, y, tries = 0;
       do {
-        x = rand(TILE * 2, ROOM_W - TILE * 2);
-        y = rand(TILE * 2, ROOM_H - TILE * 2);
+        x = rand(TILE * 2, WORLD_W - TILE * 2);
+        y = rand(TILE * 2, WORLD_H - TILE * 2);
         tries++;
       } while (tries < 30 && (
         dist2(x, y, entryX, entryY) < 150 ||
-        dist2(x, y, ROOM_W / 2, ROOM_H / 2) < 60 ||
+        dist2(x, y, WORLD_W / 2, WORLD_H / 2) < 60 ||
         room.solidTile(Math.floor(x / TILE), Math.floor(y / TILE))));
       const e = new Enemy(choice(pools[tier]), x, y, floorNum);
       e.hp = e.maxHp = Math.max(2, Math.ceil(e.hp * hpMul));
@@ -201,42 +201,42 @@ function createRoomContents(room, floorNum, entryX, entryY) {
   }
 
   if (room.type === 'treasure') {
-    const rp = makeRewardPickup(ROOM_W / 2, ROOM_H / 2, game.player);
+    const rp = makeRewardPickup(WORLD_W / 2, WORLD_H / 2, game.player);
     if (rp.kind === 'item' && !rp.item)
-      for (let i = 0; i < 3; i++) room.pickups.push(new Pickup('coin', ROOM_W / 2 + rand(-30, 30), ROOM_H / 2 + rand(-20, 20)));
+      for (let i = 0; i < 3; i++) room.pickups.push(new Pickup('coin', WORLD_W / 2 + rand(-30, 30), WORLD_H / 2 + rand(-20, 20)));
     else room.pickups.push(rp);
   }
 
   if (room.type === 'shop') {
     // 货架：1 件道具/武器 + 2 件消耗品，明码标价
-    const rp = makeRewardPickup(ROOM_W / 2, ROOM_H / 2 - 26, game.player);
+    const rp = makeRewardPickup(WORLD_W / 2, WORLD_H / 2 - 26, game.player);
     rp.price = rp.kind === 'weapon' ? 5 : 6;
     if (rp.kind === 'item' && !rp.item) {
-      room.pickups.push(new Pickup(choice(['coin', 'key']), ROOM_W / 2, ROOM_H / 2 - 26, null, 2));
+      room.pickups.push(new Pickup('coin', WORLD_W / 2, WORLD_H / 2 - 26, null, 2));
     } else {
       room.pickups.push(rp); room.shelf = (room.shelf || []).concat([rp]);
     }
-    const g2 = new Pickup(choice(['heart', 'coin']), ROOM_W / 2 - 130, ROOM_H / 2 - 26, null, 2);
-    const g3 = new Pickup(choice(['key', 'heart', 'coin']), ROOM_W / 2 + 130, ROOM_H / 2 - 26, null, 1);
+    const g2 = new Pickup(choice(['heart', 'coin']), WORLD_W / 2 - 130, WORLD_H / 2 - 26, null, 2);
+    const g3 = new Pickup(choice(['heart', 'coin']), WORLD_W / 2 + 130, WORLD_H / 2 - 26, null, 1);
     room.pickups.push(g2, g3); room.shelf = (room.shelf || []).concat([g2, g3]);
   }
 
   if (room.type === 'boss') {
     const cfg = BOSSES[Math.min(floorNum, BOSSES.length) - 1];
-    room.boss = new Boss(cfg, ROOM_W / 2, ROOM_H * .42, floorNum);
+    room.boss = new Boss(cfg, WORLD_W / 2, WORLD_H * .42, floorNum);
   }
 }
 
 // 清房奖励：保底 1 金币，35% 掉武器，另掷 55% 随机补给
 function rollClearReward(room, floorNum) {
-  const cx = ROOM_W / 2, cy = ROOM_H / 2;
-  room.pickups.push(new Pickup('coin', cx + rand(-40, 40), cy + rand(-30, 30)));
-  room.pickups.push(new Pickup('coin', cx + rand(-40, 40), cy + rand(-30, 30))); // 保底2币
+  const cx = WORLD_W / 2, cy = WORLD_H / 2;
+  room.pickups.push(new Pickup('coin', cx + rand(-60, 60), cy + rand(-40, 40)));
+  room.pickups.push(new Pickup('coin', cx + rand(-60, 60), cy + rand(-40, 40))); // 保底2币
   if (Math.random() < .35)
-    room.pickups.push(new Pickup('weapon', cx + rand(-50, 50), cy + rand(-40, 40), null, 0, pickWeaponId(game.player)));
+    room.pickups.push(new Pickup('weapon', cx + rand(-80, 80), cy + rand(-50, 50), null, 0, pickWeaponId(game.player)));
   if (Math.random() > .55) {
-    const kind = choice(['coin', 'key', 'heart', 'halfheart', 'halfheart']);
-    room.pickups.push(new Pickup(kind, cx + rand(-60, 60), cy + rand(-40, 40)));
+    const kind = choice(['coin', 'heart', 'halfheart', 'halfheart']);
+    room.pickups.push(new Pickup(kind, cx + rand(-90, 90), cy + rand(-50, 50)));
   }
 }
 
@@ -247,17 +247,17 @@ function waveSpawn(room, floorNum) {
     ['attackfly', 'gaper', 'pooter', 'bone', 'eye', 'bat', 'hopper', 'mushroom'],
     ['attackfly', 'gaper', 'splitter', 'bone', 'eye', 'ghost', 'turret', 'bat', 'spreader'],
   ];
-  const n = randi(1, 2);
+  const n = randi(2, 3);
   for (let i = 0; i < n; i++) {
     let x, y, tries = 0;
     do {
       const side = randi(0, 3);
-      if (side === 0) { x = rand(TILE * 1.6, ROOM_W - TILE * 1.6); y = TILE * 1.6; }
-      else if (side === 1) { x = rand(TILE * 1.6, ROOM_W - TILE * 1.6); y = ROOM_H - TILE * 1.6; }
-      else if (side === 2) { x = TILE * 1.6; y = rand(TILE * 1.6, ROOM_H - TILE * 1.6); }
-      else { x = ROOM_W - TILE * 1.6; y = rand(TILE * 1.6, ROOM_H - TILE * 1.6); }
+      if (side === 0) { x = rand(TILE * 1.6, WORLD_W - TILE * 1.6); y = TILE * 1.6; }
+      else if (side === 1) { x = rand(TILE * 1.6, WORLD_W - TILE * 1.6); y = WORLD_H - TILE * 1.6; }
+      else if (side === 2) { x = TILE * 1.6; y = rand(TILE * 1.6, WORLD_H - TILE * 1.6); }
+      else { x = WORLD_W - TILE * 1.6; y = rand(TILE * 1.6, WORLD_H - TILE * 1.6); }
       tries++;
-    } while (tries < 12 && (dist2(x, y, game.player.x, game.player.y) < 130 ||
+    } while (tries < 12 && (dist2(x, y, game.player.x, game.player.y) < 260 ||
       room.solidTile(Math.floor(x / TILE), Math.floor(y / TILE))));
     const e = new Enemy(choice(pools[room.tier != null ? room.tier : clamp(floorNum - 1, 0, 2)]), x, y, floorNum);
     if (room.hpMul) e.hp = e.maxHp = Math.max(2, Math.ceil(e.hp * room.hpMul));

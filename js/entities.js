@@ -23,6 +23,7 @@ class Tear {
     this.life = opts.life || 80; this.dead = false;
     this.homing = opts.homing || false; this.big = opts.big || false;
     this.colorKey = opts.colorKey || null;
+    this.bulletKey = opts.bulletKey || null; // Q 版弹种分型（缺省走 colorKey/敌我兜底）
     this.pierce = opts.pierce || 0;
     if (opts.splitT !== undefined) { this.splitT = opts.splitT; this.sp = Math.hypot(vx, vy); this.rot = opts.rot; this.eliteSplit = opts.eliteSplit; }
   }
@@ -44,12 +45,12 @@ class Tear {
       for (let i = 0; i < 4; i++) {
         const a = base + i * Math.PI / 2;
         room.tears.push(new Tear(this.x, this.y, Math.cos(a) * this.sp, Math.sin(a) * this.sp,
-          2, 5.5, false, { life: 90 }));
+          2, 5.5, false, { life: 90, bulletKey: "shard" }));
       }
       if (this.eliteSplit) for (let i = 0; i < 4; i++) {
         const a = base + Math.PI / 4 + i * Math.PI / 2;
         room.tears.push(new Tear(this.x, this.y, Math.cos(a) * this.sp, Math.sin(a) * this.sp,
-          2, 5.5, false, { life: 90 }));
+          2, 5.5, false, { life: 90, bulletKey: "shard" }));
       }
       SFX.play('enemyShoot');
       return;
@@ -106,7 +107,7 @@ class Player {
     this.speed = 3.0; this.dmg = 3.2; this.tearSpeed = 6.6; this.tearR = 6.5;
     this.fireDelay = 13; this.tearLife = 80;
     this.hearts = 6; this.maxHearts = 6;
-    this.coins = 0; this.keys = 0;
+    this.coins = 0;
     this.dashCd = 0; this.dashCdMax = 70; this.dashing = 0; this.dashVx = 0; this.dashVy = 0;
     this.homing = false; this.shotsPerDir = 1; this.pickupMag = 24;
     this.pierce = 0; this.vamp = 0;
@@ -127,6 +128,7 @@ class Player {
       moveCircle(this, (this.x - srcX) / d * 14, (this.y - srcY) / d * 14, g.cur);
     }
     SFX.play('hurt'); shake(n >= 3 ? 9 : 5);
+    if (IS_MOBILE && navigator.vibrate) { try { navigator.vibrate(n >= 3 ? 60 : 35); } catch (e) {} }
     spawnParticles(g.cur, this.x, this.y, 10, '#c93030', 3);
     addBlood(g.cur, this.x, this.y, 14);
     if (this.hearts <= 0 && g.reviveAvail) { // 亡者残响：每局一次的复活
@@ -152,7 +154,7 @@ class Player {
       if (room.boss && !room.boss.dead && !hits.includes(room.boss) && dist2(px, py, room.boss.x, room.boss.y) < room.boss.r * .9) hits.push(room.boss);
     }
     for (const h of hits) h.hit ? (h.cfg ? h.hit(dmg, room, h.x, h.y) : h.hit(dmg)) : null;
-    game.fx.push({ type: 'laser', x1: this.x + ux * 16, y1: this.y + uy * 16, x2: ex, y2: ey, w: 5 + 2.2 * lvl, t: 9 });
+    game.fx.push({ type: 'laser', x1: this.x + ux * 16, y1: this.y + uy * 16, x2: ex, y2: ey, lvl, t: 9 });
     SFX.play('laser');
   }
   fireChain(room, ux, uy, lvl) {
@@ -185,7 +187,7 @@ class Player {
       if (best.cfg) best.hit(dmg, room, best.x, best.y); else best.hit(dmg);
     }
     if (pts.length > 1) {
-      game.fx.push({ type: 'bolt', pts, t: 10 });
+      game.fx.push({ type: 'bolt', pts, lvl, t: 10 });
       SFX.play('zap');
     } else {
       // 无目标时向前发射一枚短程电弧弹，保证开火必有反馈
@@ -198,8 +200,8 @@ class Player {
   heal(n) { this.hearts = clamp(this.hearts + n, 0, this.maxHearts); }
   update(room) {
     if (this.inv > 0) this.inv--;
-    // 玩家卡岩自救（击退/异常导致的嵌入），与敌人同策略，防永久软锁
-    if (room.solidTile(Math.floor(this.x / TILE), Math.floor(this.y / TILE))) {
+    // 玩家卡岩自救（击退/异常导致的嵌入）；冲刺穿墙态豁免
+    if (!this.dashing && room.solidTile(Math.floor(this.x / TILE), Math.floor(this.y / TILE))) {
       outer: for (let r2 = 1; r2 < 5; r2++)
         for (let oy = -r2; oy <= r2; oy++) for (let ox = -r2; ox <= r2; ox++) {
           const tx = Math.floor(this.x / TILE) + ox, ty = Math.floor(this.y / TILE) + oy;
@@ -225,12 +227,20 @@ class Player {
       this.dashing = 13; this.dashVx = dx / l * 9.2; this.dashVy = dy / l * 9.2;
       this.dashCd = this.dashCdMax;
       SFX.play('dash');
-      if (!game.taughtDash) { game.taughtDash = true; game.hint = { text: '冲刺有无敌帧，还能撞开箱子和杂物', t: 200 }; }
+      if (!game.taughtDash) { game.taughtDash = true; game.hint = { text: '冲刺无敌帧：能穿岩石杂物，撞开箱子和货柜', t: 200 }; }
     } else if (Touch.dashTap) Touch.dashTap = false;
     if (this.dashing > 0) {
       this.dashing--;
       this.inv = Math.max(this.inv, 2); // 冲刺全程无敌
-      moveCircle(this, this.dashVx, this.dashVy, room);
+      // 穿墙冲刺：岩石/杂物直接掠过，只有外墙挡路
+      {
+        const wallAt = (x, y) => room.wallOnlyTile(Math.floor(x / TILE), Math.floor(y / TILE));
+        const nx = this.x + this.dashVx, ny = this.y + this.dashVy;
+        if (!wallAt(nx + Math.sign(this.dashVx) * (this.r - 4), this.y)) this.x = nx;
+        if (!wallAt(this.x, ny + Math.sign(this.dashVy) * (this.r - 4))) this.y = ny;
+        this.x = clamp(this.x, TILE + this.r, WORLD_W - TILE - this.r);
+        this.y = clamp(this.y, TILE + this.r, WORLD_H - TILE - this.r);
+      }
       if (this.dashing % 2 === 0) game.fx.push({ type: 'ghost', x: this.x, y: this.y, char: this.char, t: 8 });
       for (const pk of room.pickups)
         if (!pk.dead && pk.kind === 'chest' && dist2(pk.x, pk.y, this.x, this.y) < pk.r + this.r) openChest(room, pk);
@@ -251,6 +261,9 @@ class Player {
       if (this.cd <= 0) {
         this.cd = effCd;
         const lvl = this.weapon.lvl;
+        // 枪口火光（+冲锋枪抛壳）：Q 版反馈 fx
+        game.fx.push({ type: 'flash', id: w.id, x: this.x + ux * 20, y: this.y + uy * 20, ang: Math.atan2(uy, ux), r: w.id === 'tear' ? 7 : 10, t: 7, t0: 7 });
+        if (w.id === 'tear') game.fx.push({ type: 'casing', x: this.x + ux * 10 - uy * 9, y: this.y + uy * 10 + ux * 9 + 5, ang: Math.atan2(uy, ux) + 2.2, t: 16, t0: 16 });
         if (w.id === 'tear') {
           for (let i = 0; i < this.shotsPerDir; i++) this.q.push({ dx: ux, dy: uy, d: i * 7, kind: 'tear' });
         } else if (w.id === 'flame') {
@@ -307,14 +320,16 @@ const ETYPE = {
   bone:      { id: 'bone',      label: '骨蛇',     hp: 8,  r: 12, spd: 1.1, dmg: 2, ai: 'charge' },
   eye:       { id: 'eye',       label: '浮眼',     hp: 8,  r: 13, spd: .9,  dmg: 2, ai: 'burst',   fire: 130, bs: 2.9 },
 };
-const ELITE_CHANCE = [0.10, 0.18, 0.26];
+const ELITE_CHANCE = [0.14, 0.22, 0.30];
 
 class Enemy {
   constructor(typeId, x, y, floorNum, opts = {}) {
     this.cfg = ETYPE[typeId];
-    this.x = x; this.y = y; this.r = this.cfg.r;
+    this.x = x; this.y = y;
     this.elite = opts.elite !== undefined ? opts.elite
       : Math.random() < (ELITE_CHANCE[clamp(floorNum - 1, 0, 2)] || 0) && typeId !== 'minifly';
+    this.rScale = this.elite ? 1.35 : 1; // 精英大一号：先看见再害怕
+    this.r = this.cfg.r * this.rScale;
     const es = this.elite ? 2.2 : 1;
     this.hp = Math.ceil(this.cfg.hp * (1 + .35 * (floorNum - 1)) * es * (game.diff || 1));
     this.maxHp = this.hp;
@@ -331,10 +346,11 @@ class Enemy {
     if (this.hp <= 0) {
       this.dead = true;
       SFX.play('kill');
+      game.fx.push({ type: 'puff', x: this.x, y: this.y, r: this.r, t: 18, t0: 18, seed: randi(0, 9) }); // Q 版死亡烟圈
       spawnParticles(room, this.x, this.y, 9, '#a82020', 3.2);
       addBlood(room, this.x, this.y, this.r + 6);
       game.kills++;
-      if (room.quota && !room.cleared) room.killed++;
+      if (room.quota && !room.cleared && this.cfg.id !== 'minifly') room.killed++; // 分裂仔喂配额会让"真怪"提前清零，不计
       game.gainXp(Math.ceil(this.maxHp / 2));
       game.soulsRun += 2;
       if (Math.random() < .06) // 刷怪流：武器持续掉落
@@ -342,7 +358,7 @@ class Enemy {
       if (game.player.vamp > 0 && Math.random() < game.player.vamp)
         room.pickups.push(new Pickup('halfheart', this.x, this.y));
       if (this.elite) // 精英必掉 1 资源，风险回报成立
-        room.pickups.push(new Pickup(choice(['coin', 'coin', 'heart', 'key']), this.x, this.y));
+        room.pickups.push(new Pickup(choice(['coin', 'coin', 'heart']), this.x, this.y));
       if (this.cfg.split) for (let i = 0; i < 2; i++)
         room.enemies.push(new Enemy(this.cfg.split, this.x + rand(-14, 14), this.y + rand(-14, 14), game.floorNum));
     } else SFX.play('hit');
@@ -387,7 +403,7 @@ class Enemy {
         else this.bump(room, Math.sin(this.t * .04) * spd, Math.cos(this.t * .055) * spd, mv);
         if (--this.fire <= 0) {
           this.fire = c.fire;
-          room.tears.push(new Tear(this.x, this.y, dx / dl * c.bs, dy / dl * c.bs, 2, 6, false, { life: 120 }));
+          room.tears.push(new Tear(this.x, this.y, dx / dl * c.bs, dy / dl * c.bs, 2, 6, false, { life: 120, bulletKey: "bile" }));
           SFX.play('enemyShoot');
         }
         break;
@@ -412,7 +428,7 @@ class Enemy {
           const n = this.elite ? 8 : 4;
           for (let i = 0; i < n; i++) {
             const a = base + i * TAU / n;
-            room.tears.push(new Tear(this.x, this.y, Math.cos(a) * c.bs, Math.sin(a) * c.bs, 2, 6, false, { life: 130 }));
+            room.tears.push(new Tear(this.x, this.y, Math.cos(a) * c.bs, Math.sin(a) * c.bs, 2, 6, false, { life: 130, bulletKey: "shell" }));
           }
           SFX.play('enemyShoot');
         }
@@ -537,7 +553,7 @@ class Boss {
       case 'hop': // 先亮落点红圈 16 帧再跳，杜绝零预警必中
         this.teleKind = 'hop'; this.act = 'tele'; this.actT = 16;
         this.hopFrom = { x: this.x, y: this.y };
-        this.hopTo = { x: clamp(p.x, TILE * 2, ROOM_W - TILE * 2), y: clamp(p.y, TILE * 2, ROOM_H - TILE * 2) };
+        this.hopTo = { x: clamp(p.x, TILE * 2, WORLD_W - TILE * 2), y: clamp(p.y, TILE * 2, WORLD_H - TILE * 2) };
         break;
       case 'radial': this.actT = 16; break;
       case 'dash': // 先锁定方向原地蓄力预警，再真正冲锋（玩家有躲避窗口）
@@ -564,7 +580,7 @@ class Boss {
       const a = baseAng + (i - (n - 1) / 2) * spread;
       game.cur.tears.push(new Tear(
         this.x + Math.cos(a) * this.r * .6, this.y + Math.sin(a) * this.r * .6,
-        Math.cos(a) * speed, Math.sin(a) * speed, 2, 7, false, { life: 150 }));
+        Math.cos(a) * speed, Math.sin(a) * speed, 2, 7, false, { life: 150, bulletKey: 'ember' }));
     }
     SFX.play('enemyShoot');
   }
@@ -689,7 +705,6 @@ class Pickup {
           if (p.hearts >= p.maxHearts) return;
           p.heal(this.kind === 'heart' ? 2 : 1); SFX.play('heal'); this.dead = true; break;
         case 'coin': p.coins++; SFX.play('coin'); this.dead = true; break;
-        case 'key': p.keys++; SFX.play('coin'); this.dead = true; break;
         case 'item':
           p.applyItem(this.item); SFX.play('item'); this.dead = true;
           game.toast = { item: this.item, t: 200 };
@@ -700,15 +715,14 @@ class Pickup {
           if (this.win) game.victory(); // 最终宝箱可能出武器，通关标记不能丢
           break;
         case 'chest':
-          if (p.keys > 0) { p.keys--; openChest(room, this); }
-          else if (this.denyCd <= 0) { SFX.play('deny'); this.denyCd = 40; game.hint = { text: '需要一把钥匙（或冲刺撞开）', t: 80 }; }
+          openChest(room, this); // 钥匙已退役：碰到即开（冲刺撞开更快）
           break;
       }
     }
   }
 }
 
-// 宝箱开启（钥匙或冲刺撞开，防钥匙单点锁死通关）
+// 宝箱开启（接触或冲刺撞开，无钥匙门槛）
 function openChest(room, c) {
   const p = game.player;
   SFX.play('doorOpen'); c.dead = true;
@@ -725,7 +739,7 @@ function openChest(room, c) {
     if (room.finalChest) game.victory(); // 道具池耗尽的最终层宝箱直接判通关
   }
   room.pickups.push(new Pickup('coin', c.x - 26, c.y + 8));
-  room.pickups.push(new Pickup(choice(['heart', 'coin', 'key']), c.x + 26, c.y + 8));
+  room.pickups.push(new Pickup(choice(['heart', 'coin']), c.x + 26, c.y + 8));
 }
 
 // ── 武器系统：四种枪，拾取换装/升级（重复拾取 +1 级，最高 5 级）──
@@ -807,6 +821,6 @@ function damageProp(room, o, d) {
   if (o.hp <= 0) {
     o.dead = true;
     spawnParticles(room, o.x, o.y, 8, '#8a6b3f', 2.6);
-    if (Math.random() < .3) room.pickups.push(new Pickup(choice(['coin', 'heart', 'key']), o.x, o.y));
+    if (Math.random() < .3) room.pickups.push(new Pickup(choice(['coin', 'heart']), o.x, o.y));
   }
 }

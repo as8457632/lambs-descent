@@ -2,11 +2,14 @@
 // ─────────────────────────────────────────────
 // 核心常量 / 工具 / 输入 / 合成音效
 // ─────────────────────────────────────────────
-const TILE = 48, GRID_W = 15, GRID_H = 9;
-const ROOM_W = GRID_W * TILE, ROOM_H = GRID_H * TILE;
+const TILE = 48, GRID_W = 45, GRID_H = 15;
+const WORLD_W = GRID_W * TILE, WORLD_H = GRID_H * TILE; // 房间世界：3 屏大，镜头滚动揭开
+const ROOM_W = 720, ROOM_H = 432; // 视口（桌面）
 const HUD_H = 64, PANEL_W = 240;
 const CANVAS_W = ROOM_W + PANEL_W;
 const CANVAS_H = ROOM_H + HUD_H;
+let VIEW_W = ROOM_W; // 当前视口宽：桌面 720，触屏隐藏侧栏后吃满 960
+let IS_MOBILE = false; // 粗指针+触控 → 手机布局（隐藏侧栏/叠层小地图/大按钮）
 const TAU = Math.PI * 2;
 
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
@@ -16,8 +19,8 @@ const randi = (a, b) => Math.floor(rand(a, b + 1));
 const choice = arr => arr[Math.floor(Math.random() * arr.length)];
 const dist2 = (ax, ay, bx, by) => Math.hypot(ax - bx, ay - by);
 
-// 门格（墙上的开口位置，单位=格）
-const DOOR_CELL = { n: [7, 0], s: [7, GRID_H - 1], w: [0, 4], e: [GRID_W - 1, 4] };
+// 门格（墙上开口，单位=格；都在 45×15 世界外圈）
+const DOOR_CELL = { n: [22, 0], s: [22, GRID_H - 1], w: [0, 7], e: [GRID_W - 1, 7] };
 const DIRS = ['n', 'e', 's', 'w'];
 const OPP = { n: 's', s: 'n', w: 'e', e: 'w' };
 const DVEC = { n: [0, -1], s: [0, 1], w: [-1, 0], e: [1, 0] };
@@ -97,10 +100,10 @@ function themePal(th, fn) {
 
 // ── 可选角色（纯外观差异）──
 const CHARS = [
-  { id: 'veteran',  name: '老兵',   hair: '#5a4634', style: 'short',    suit: '#4a5a3e', skin: '#d9b08c', gun: '#3a3d42' },
-  { id: 'agent',    name: '女探员', hair: '#8a4a2e', style: 'ponytail', suit: '#3e4658', skin: '#e6c0a0', gun: '#2e3238' },
-  { id: 'girl',     name: '少女',   hair: '#c98a3a', style: 'twintail', suit: '#7a3e58', skin: '#ecc9ae', gun: '#4a4048' },
-  { id: 'operator', name: '特工',   hair: '#2a2a2e', style: 'cap',      suit: '#2e2e34', skin: '#c9a07e', gun: '#1e2024' },
+  { id: 'veteran',  name: '老兵',   title: '退役猎兵 · 步枪手', hair: '#5a4634', style: 'short',    suit: '#4a5a3e', skin: '#d9b08c', gun: '#3a3d42', gunType: 'rifle',   bulk: 1.08 },
+  { id: 'agent',    name: '女探员', title: '情报科 · 手枪速射', hair: '#8a4a2e', style: 'ponytail', suit: '#3e4658', skin: '#e6c0a0', gun: '#2e3238', gunType: 'pistol',  bulk: .96 },
+  { id: 'girl',     name: '少女',   title: '后勤奇迹 · 冲锋枪', hair: '#c98a3a', style: 'twintail', suit: '#7a3e58', skin: '#ecc9ae', gun: '#4a4048', gunType: 'smg',     bulk: .9 },
+  { id: 'operator', name: '特工',   title: '幽灵小队 · 狙击手', hair: '#2a2a2e', style: 'cap',      suit: '#2e2e34', skin: '#c9a07e', gun: '#1e2024', gunType: 'marksman', bulk: 1 },
 ];
 
 // ── 局间元进度：魂 + 永久强化（localStorage 持久化）──
@@ -154,10 +157,10 @@ const Touch = {
   startedInPlay: new Set(), // 按下时仍处于战斗的手指 id，抬手不触发菜单确认
   supported() { return 'ontouchstart' in window || navigator.maxTouchPoints > 0; },
   init(cv) {
-    const btn = this.btn = { x: ROOM_W - 56, y: CANVAS_H - 150, r: 30 };
-    const pbtn = this.pauseBtn = { x: ROOM_W - 56, y: CANVAS_H - 240, r: 22 };
-    const mbtn = this.muteBtn = { x: ROOM_W - 56, y: CANVAS_H - 302, r: 20 };
-    const gbtn = this.mapBtn = { x: ROOM_W - 56, y: CANVAS_H - 360, r: 20 };
+    const btn = this.btn = { x: VIEW_W - 70, y: CANVAS_H - 96, r: 38 };
+    const pbtn = this.pauseBtn = { x: VIEW_W - 36, y: HUD_H + 204, r: 20 };
+    const mbtn = this.muteBtn = { x: VIEW_W - 36, y: HUD_H + 164, r: 18 };
+    const gbtn = this.mapBtn = { x: VIEW_W - 36, y: HUD_H + 124, r: 18 };
     const pts = e => {
       const r = cv.getBoundingClientRect();
       if (game.rotOn) { // CSS rotate(90deg)：屏幕(y向下) → 画布逻辑坐标的逆旋转
@@ -182,13 +185,14 @@ const Touch = {
       }
       for (const p of pts(e)) {
         if (game.state === 'play' && Math.hypot(p.x - gbtn.x, p.y - gbtn.y) < gbtn.r + 8) { this.mapTap = true; continue; } // 仅战斗态响应，防跨态幻影开图
+        if (game.state === 'play' && IS_MOBILE && p.x >= VIEW_W - 152 && p.x <= VIEW_W - 8 && p.y >= HUD_H + 3 && p.y <= HUD_H + 104) { this.mapTap = true; continue; } // 点右上叠层小地图开全图
         if (game.state === 'play') this.startedInPlay.add(p.id); // 战斗中按下的手指，抬起时不得触发菜单确认
         if (Math.hypot(p.x - pbtn.x, p.y - pbtn.y) < pbtn.r + 8) { this.pauseTap = true; continue; }
         if (Math.hypot(p.x - mbtn.x, p.y - mbtn.y) < mbtn.r + 8) { this.muteTap = true; continue; }
         // 冲刺键：战斗中常驻（不再按余弹吞触点）；其他状态照常生成摇杆消除死区
         if (game.state === 'play' && game.player && game.player.dashCd <= 0 && Math.hypot(p.x - btn.x, p.y - btn.y) < btn.r + 10) { this.dashTap = true; continue; }
-        // 右侧属性面板区不生成摇杆
-        const side = p.x < ROOM_W / 2 ? 'move' : p.x < ROOM_W ? 'aim' : null;
+        // 右侧属性面板区不生成摇杆（触屏隐藏侧栏时 VIEW_W=960 全屏可用）
+        const side = p.x < VIEW_W / 2 ? 'move' : p.x < VIEW_W ? 'aim' : null;
         if (side && !this.sticks[side]) this.sticks[side] = { id: p.id, ox: p.x, oy: p.y, x: p.x, y: p.y };
       }
     }, { passive: false });
@@ -235,7 +239,7 @@ const Touch = {
         const st = this.sticks[s];
         if (!st || st.id !== p.id) continue;
         // 抬起的主指 → 移交给了同侧还按着的指头，避免双指操作断流
-        const heir = alive.find(a => a.id !== p.id && (s === 'move' ? a.x < ROOM_W / 2 : (a.x >= ROOM_W / 2 && a.x < ROOM_W)) &&
+        const heir = alive.find(a => a.id !== p.id && (s === 'move' ? a.x < VIEW_W / 2 : (a.x >= VIEW_W / 2 && a.x < VIEW_W)) &&
           !Object.values(this.sticks).some(v => v && v.id === a.id));
         this.sticks[s] = heir ? { id: heir.id, ox: heir.x, oy: heir.y, x: heir.x, y: heir.y } : null;
       }

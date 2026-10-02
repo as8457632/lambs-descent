@@ -9,6 +9,7 @@ const game = {
   floor: null, floorNum: 1,
   player: null, cur: null,
   particles: [], toast: null, fx: [],
+  cam: { x: 0, y: 0 },
   shakeAmt: 0, time: 0,
   kills: 0, roomsSeen: 0, deaths: 0,
   runTime: 0,
@@ -17,7 +18,7 @@ const game = {
 function shake(n) { game.shakeAmt = Math.max(game.shakeAmt, n); }
 
 let cv, cx;
-const BUILD = 'v2.6'; // 版本号水印：确认玩家加载的是否为最新构建
+const BUILD = 'v3.1'; // 版本号水印：确认玩家加载的是否为最新构建
 window.__BUILD = BUILD;
 window.DBG_VP = () => ({ build: BUILD, inner: [innerWidth, innerHeight], vv: window.visualViewport ? [Math.round(visualViewport.width), Math.round(visualViewport.height)] : null, dpr: devicePixelRatio, css: [Math.round(cv ? cv.getBoundingClientRect().width : 0), Math.round(cv ? cv.getBoundingClientRect().height : 0)] });
 
@@ -28,6 +29,8 @@ function boot() {
   cx = cv.getContext('2d');
   cx.setTransform(dpr, 0, 0, dpr, 0, 0);
   window.LOGICAL_W = ROOM_W;
+  IS_MOBILE = Touch.supported() && matchMedia('(pointer: coarse)').matches; // 手机布局：隐藏侧栏、视口吃满 960
+  VIEW_W = IS_MOBILE ? CANVAS_W : ROOM_W;
   Input.init();
   Touch.init(cv);
   // JS 驱动画布尺寸：免疫平板桌面模式/工具栏收展导致的 vw/dvh 失准
@@ -107,7 +110,7 @@ function boot() {
   }
   window.game = game;                       // 调试接口：HP/敌人/子弹/房间/道具/属性
   window.DBG = {
-    newRun, loadFloor, enterRoom, genFloor, Player, Enemy, Boss, Pickup, Tear, ETYPE, ITEMS, BOSSES, TILE, ROOM_W, ROOM_H,
+    newRun, loadFloor, enterRoom, genFloor, Player, Enemy, Boss, Pickup, Tear, ETYPE, ITEMS, BOSSES, TILE, ROOM_W, ROOM_H, WORLD_W, WORLD_H,
     // 测试辅助：用真实 moveCircle 碰撞逐帧走到目标点（不瞬移）
     moveTo(x, y, spd = 3) {
       const p = game.player;
@@ -134,7 +137,7 @@ function newRun() {
   game.floorNum = 1;
   game.kills = 0; game.roomsSeen = 0; game.runTime = 0;
   game.theme = choice(THEMES);
-  game.player = new Player(ROOM_W / 2, ROOM_H / 2);
+  game.player = new Player(WORLD_W / 2, WORLD_H / 2);
   game.player.char = Meta.load().char || 0;
   game.particles = []; game.toast = null;
   game.taughtClear = false; game.taughtWeapon = false; game.taughtDash = false; game.lastKiller = null; game.hint = null;
@@ -206,7 +209,7 @@ function enterRoom(room, fromDir) {
   if (!room.visited) { room.visited = true; game.roomsSeen++; }
   room.tears = []; // 敌方弹幕进房即散
 
-  let ex = ROOM_W / 2, ey = ROOM_H / 2;
+  let ex = WORLD_W / 2, ey = WORLD_H / 2;
   if (fromDir) {
     // 从 fromDir 方向穿门 → 出现在新房间 OPP[fromDir] 侧的门，并向房内推
     const side = OPP[fromDir];
@@ -217,6 +220,9 @@ function enterRoom(room, fromDir) {
   }
   createRoomContents(room, game.floorNum, ex, ey);
   game.player.x = ex; game.player.y = ey;
+  // 相机瞬移到出生点视口中心，进房不"甩镜头"
+  game.cam.x = clamp(ex - VIEW_W / 2, 0, WORLD_W - VIEW_W);
+  game.cam.y = clamp(ey - ROOM_H / 2, 0, WORLD_H - ROOM_H);
   game.player.q = []; game.player.dashing = 0; // 跨房不清位移会带进新房"幽灵冲刺" 
 
   if (!room.cleared && room.enemies.length > 0) {
@@ -241,13 +247,14 @@ function update() {
   if (game.state === 'title') {
     const mt = Touch.menuTap; Touch.menuTap = null;
     const m = Meta.load();
+    const mh = charZoneHit(mt);
     for (let i = 0; i < CHARS.length; i++) {
-      if (Input.pressed('Digit' + (i + 1)) || (mt && inZone(mt, charZones()[i]))) { m.char = i; Meta.save(); SFX.play('coin'); Touch.tapped = false; } // 点卡=只选人，不触发"点屏开局"
+      if (Input.pressed('Digit' + (i + 1)) || (mh && inZone(mh, charZones()[i]))) { m.char = i; Meta.save(); SFX.play('coin'); Touch.tapped = false; } // 点卡=只选人，不触发"点屏开局"
     }
     if (Input.pressed('Enter')) newRun();
     else if (Input.pressed('KeyS')) { game.workshopFrom = 'title'; game.state = 'workshop'; }
     else if (mt && inZone(mt, workshopBtnZone())) { game.workshopFrom = 'title'; game.state = 'workshop'; }
-    else if (mt && !CHARS.some((_, i) => inZone(mt, charZones()[i]))) newRun(); // 点选人区外才开局
+    else if (mt && !(mh && CHARS.some((_, i) => inZone(mh, charZones()[i])))) newRun(); // 点选人区外才开局
     else if (Touch.tapped) newRun();
     Touch.tapped = false;
     return;
@@ -312,15 +319,22 @@ function update() {
   const room = game.cur, p = game.player;
   p.update(room);
 
-  // 配额制持续刷怪：没杀满就一直从边缘补怪；杀满后残余蒸发
-  if (room.quota && !room.cleared) {
-    if (room.killed < room.quota) {
-      if (--room.spawnT <= 0 && room.enemies.length < 7) waveSpawn(room, game.floorNum);
-    } else {
-      for (const e of room.enemies) {
-        if (!e.dead) { e.dead = true; spawnParticles(room, e.x, e.y, 5, '#a82020', 2.4); }
-      }
-    }
+  // 相机跟随：死区 ±60px 防抖，lerp 平滑，钳制在世界边缘
+  {
+    const vw = VIEW_W, vh = ROOM_H, dz = 60;
+    const scx = p.x - game.cam.x, scy = p.y - game.cam.y;
+    let tx = game.cam.x, ty = game.cam.y;
+    if (scx < vw / 2 - dz) tx -= (vw / 2 - dz) - scx;
+    else if (scx > vw / 2 + dz) tx += scx - (vw / 2 + dz);
+    if (scy < vh / 2 - dz) ty -= (vh / 2 - dz) - scy;
+    else if (scy > vh / 2 + dz) ty += scy - (vh / 2 + dz);
+    game.cam.x = lerp(game.cam.x, clamp(tx, 0, WORLD_W - vw), .16);
+    game.cam.y = lerp(game.cam.y, clamp(ty, 0, WORLD_H - vh), .16);
+  }
+
+  // 配额制持续刷怪：没杀满就一直从边缘补怪；杀满后停止补刷，场上残敌必须亲手清光才开门
+  if (room.quota && !room.cleared && room.killed < room.quota) {
+    if (--room.spawnT <= 0 && room.enemies.length < 13) waveSpawn(room, game.floorNum);
   }
 
   for (const e of room.enemies) if (!e.dead) e.update(room);
@@ -372,6 +386,7 @@ function handleCollisions(room) {
         if (!e.dead && !(tr.hits || (tr.hits = [])).includes(e) &&
             dist2(tr.x, tr.y, e.x, e.y) < tr.r + e.r) {
           e.hit(tr.dmg, room, tr.x, tr.y);
+          game.fx.push({ type: 'spark', id: tr.isPlayer ? (tr.colorKey === 'spark' ? 'light' : 'tear') : 'tear', x: tr.x, y: tr.y, ang: Math.atan2(-tr.vy, -tr.vx), r: tr.r + 5, t: 12, t0: 12 });
           tr.hits.push(e);
           if (tr.pierce > 0) { tr.pierce--; } // 穿透：不消失，换下一个目标
           else { hit = true; }
@@ -382,6 +397,7 @@ function handleCollisions(room) {
       if (!hit && room.boss && !room.boss.dead &&
           dist2(tr.x, tr.y, room.boss.x, room.boss.y) < tr.r + room.boss.r * .85) {
         room.boss.hit(tr.dmg); hit = true;
+        game.fx.push({ type: 'spark', id: 'laser', x: tr.x, y: tr.y, ang: Math.atan2(-tr.vy, -tr.vx), r: tr.r + 5, t: 12, t0: 12 });
       }
       if (!hit) for (const o of room.props) {
         if (!o.dead && o.kind === 'junk' && dist2(tr.x, tr.y, o.x, o.y) < tr.r + 14) {
@@ -418,16 +434,17 @@ function onRoomCleared(room) {
     room.boss = null; room.hasEnemiesPlanned = false;
     game.gainXp(30 + 10 * game.floorNum);
     game.soulsRun += 40 + 20 * game.floorNum;
-    const cxr = ROOM_W / 2, cyr = ROOM_H / 2;
+    const cxr = WORLD_W / 2, cyr = WORLD_H / 2;
     room.pickups.push(new Pickup('chest', cxr - 40, cyr));
     if (game.floorNum < 3) room.trapdoor = { x: cxr + 44, y: cyr };
     else room.finalChest = true;
     game.hint = { text: game.floorNum < 3 ? 'Boss 已死！清光残敌，踩开启的地洞下潜' : 'Boss 已死！打开宝箱解救人质', t: 300 };
   } else {
     rollClearReward(room, game.floorNum);
+    if (!room.boss && !game.taughtDoor) { game.taughtDoor = true; game.hint = { text: '门已开！看小地图找亮格，走到房间边缘的门撤离', t: 240 }; }
     if (room.type === 'normal' && !game.floor.gaveStarter) {
       game.floor.gaveStarter = true;
-      game.cur.pickups.push(new Pickup('weapon', ROOM_W / 2 + rand(-40, 40), ROOM_H / 2 + rand(-30, 30), null, 0, pickWeaponId(game.player)));
+      game.cur.pickups.push(new Pickup('weapon', WORLD_W / 2 + rand(-40, 40), WORLD_H / 2 + rand(-30, 30), null, 0, pickWeaponId(game.player)));
       game.hint = { text: '拾取武器：同一把枪再捡会升级，换枪会归零', t: 240 };
     }
   }
@@ -478,45 +495,60 @@ function draw() {
 
   const pal = themePal(game.theme || THEMES[0], game.floorNum);
   cx.save();
-  if (game.shakeAmt > .5) cx.translate(rand(-game.shakeAmt, game.shakeAmt), rand(-game.shakeAmt, game.shakeAmt));
+  let shx = 0, shy = 0;
+  if (game.shakeAmt > .5) { shx = rand(-game.shakeAmt, game.shakeAmt); shy = rand(-game.shakeAmt, game.shakeAmt); }
+  cx.translate(Math.round(-game.cam.x + shx), Math.round(HUD_H - game.cam.y + shy));
 
   drawRoom(cx, game.cur, pal, game.time);
   for (const pk of game.cur.pickups) if (!pk.dead) drawPickup(cx, pk, game.time);
   for (const e of game.cur.enemies) drawEnemy(cx, e, game.time);
   if (game.cur.boss && !game.cur.boss.dead) drawBoss(cx, game.cur.boss, game.time);
   if (!(game.state === 'dead' || game.state === 'win')) drawPlayer(cx, game.player, game.time);
-  for (const tr of game.cur.tears) drawTear(cx, tr);
+  for (const tr of game.cur.tears) drawTear(cx, tr, game.time);
   drawFx(cx, game);
   for (const q of game.particles) {
     cx.globalAlpha = clamp(q.life / 18, 0, 1);
     cx.fillStyle = q.c;
-    cx.beginPath(); cx.arc(q.x, q.y + HUD_H, q.r, 0, TAU); cx.fill();
+    cx.beginPath(); cx.arc(q.x, q.y, q.r, 0, TAU); cx.fill();
   }
   cx.globalAlpha = 1;
   cx.restore();
 
   drawHUD(cx, game);
+  if (game.cur.boss && !game.cur.boss.dead && game.state === 'play') drawBossBar(cx, game.cur.boss);
   if (game.state === 'play' && !game.rotMode && cv.getBoundingClientRect().width < 700) { // 画面过小：自救指引 + 视口自检数据
-    cx.fillStyle = 'rgba(120,20,20,.88)'; cx.fillRect(ROOM_W / 2 - 258, HUD_H + 2, 516, 36);
-    cx.strokeStyle = '#e8c85e'; cx.lineWidth = 1; cx.strokeRect(ROOM_W / 2 - 258, HUD_H + 2, 516, 36);
+    cx.fillStyle = 'rgba(120,20,20,.88)'; cx.fillRect(VIEW_W / 2 - 258, HUD_H + 2, 516, 36);
+    cx.strokeStyle = '#e8c85e'; cx.lineWidth = 1; cx.strokeRect(VIEW_W / 2 - 258, HUD_H + 2, 516, 36);
     cx.fillStyle = '#ffe0c0'; cx.font = 'bold 13px monospace'; cx.textAlign = 'center';
-    cx.fillText(Touch.supported() ? '画面过小！点右下 ⛶ 强制横屏全屏' : '画面过小！按 F 全屏 / 最大化窗口 / 按 Ctrl+0 重置缩放', ROOM_W / 2, HUD_H + 17);
+    cx.fillText(Touch.supported() ? '画面过小！点上方 ⛶ 强制横屏全屏' : '画面过小！按 F 全屏 / 最大化窗口 / 按 Ctrl+0 重置缩放', VIEW_W / 2, HUD_H + 17);
     cx.font = '10px monospace'; cx.fillStyle = '#e0b090';
     const vv = window.visualViewport;
-    cx.fillText(`诊断[${BUILD}] inner=${innerWidth}x${innerHeight} vv=${vv ? Math.round(vv.width) + 'x' + Math.round(vv.height) + ' scale=' + vv.scale.toFixed(2) : '-'} dpr=${devicePixelRatio}`, ROOM_W / 2, HUD_H + 32);
+    cx.fillText(`诊断[${BUILD}] inner=${innerWidth}x${innerHeight} vv=${vv ? Math.round(vv.width) + 'x' + Math.round(vv.height) + ' scale=' + vv.scale.toFixed(2) : '-'} dpr=${devicePixelRatio}`, VIEW_W / 2, HUD_H + 32);
     cx.textAlign = 'left';
   }
   if (game.state === 'play' && game.cur.quota && !game.cur.cleared) { // 房间底部配额进度：杀到多少才开门一目了然
-    const q = game.cur.quota, k = Math.min(game.cur.killed, q), cxb = ROOM_W / 2;
+    const q = game.cur.quota, k = Math.min(game.cur.killed, q), cxb = VIEW_W / 2;
     cx.fillStyle = 'rgba(0,0,0,.55)'; cx.fillRect(cxb - 72, CANVAS_H - 24, 144, 15);
     cx.fillStyle = '#d9a92e'; cx.fillRect(cxb - 70, CANVAS_H - 22, 140 * (k / q), 11);
     cx.strokeStyle = 'rgba(217,169,46,.7)'; cx.lineWidth = 1; cx.strokeRect(cxb - 72, CANVAS_H - 24, 144, 15);
     cx.fillStyle = '#f0e2c0'; cx.font = 'bold 10px monospace'; cx.textAlign = 'center';
+    cx.strokeStyle = 'rgba(10,6,4,.9)'; cx.lineWidth = 3; cx.strokeText(`本房猎杀 ${k}/${q}`, cxb, CANVAS_H - 13); // 描边防金色填充吃字
     cx.fillText(`本房猎杀 ${k}/${q}`, cxb, CANVAS_H - 13);
     cx.textAlign = 'left';
   }
   drawVignette(cx, game);
-  drawSidePanel(cx, game);
+  if (game.state === 'play') drawStragglers(cx, game); // 屏外残敌方位箭头
+  if (!IS_MOBILE) drawSidePanel(cx, game);
+  else drawMobileOverlay(cx, game); // 手机：右上叠层小地图 + 魂计数
+  if (IS_MOBILE && !game.rotMode && innerHeight > innerWidth && game.state === 'play' && !game.mapOpen && !game.paused) { // 竖屏观感自救：引导卡
+    cx.fillStyle = 'rgba(8,6,5,.78)';
+    cx.beginPath(); cx.roundRect(VIEW_W / 2 - 210, CANVAS_H - 66, 420, 40, 8); cx.fill();
+    cx.strokeStyle = '#b08a3a'; cx.lineWidth = 1.5;
+    cx.beginPath(); cx.roundRect(VIEW_W / 2 - 210, CANVAS_H - 66, 420, 40, 8); cx.stroke();
+    cx.fillStyle = '#e8c85e'; cx.font = 'bold 14px monospace'; cx.textAlign = 'center';
+    cx.fillText('↑ 点上方「强制横屏」或旋转手机，体验完整战场', VIEW_W / 2, CANVAS_H - 41);
+    cx.textAlign = 'left';
+  }
   if (game.state === 'levelup') drawLevelUp(cx, game);
   if (game.state === 'play' && game.mapOpen) drawFloorMap(cx, game);
 
@@ -527,10 +559,12 @@ function draw() {
   }
   if (game.paused && game.state === 'play' && !game.mapOpen) {
     cx.fillStyle = 'rgba(0,0,0,.55)'; cx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    if (IS_MOBILE) drawMobileStats(cx, game); // 面板先画，文案后叠保证可读
     cx.fillStyle = '#d8cba8'; cx.font = 'bold 34px monospace'; cx.textAlign = 'center';
-    cx.fillText('暂停', ROOM_W / 2, CANVAS_H / 2);
+    cx.fillText('暂停', VIEW_W / 2, CANVAS_H / 2 - 172);
     cx.font = '14px monospace'; cx.fillStyle = '#a8937c';
-    cx.fillText(Touch.supported() ? '点右下暂停按钮继续' : '按 P 继续', ROOM_W / 2, CANVAS_H / 2 + 30);
+    cx.fillText(Touch.supported() ? '点右上暂停按钮继续' : '按 P 继续', VIEW_W / 2, CANVAS_H / 2 - 142);
+    cx.textAlign = 'left';
   }
   if ((Touch.supported() || Touch.active) && game.state === 'play' && !game.mapOpen) drawTouchUI(cx, game.time);
 
@@ -595,21 +629,29 @@ function drawTitle() {
   ctx.fillStyle = '#5a6472'; ctx.font = '12px monospace';
   ctx.fillText('— 突入敌楼，逐层清剿，解救人质 —', ROOM_W / 2, 180);
 
-  // 角色选择行（4 个可选干员，纯外观；点击/数字键 1-4 选择）
+  // 角色选择卡（大立绘 + 称号，点击即选；1-4 键快选）
   ctx.fillStyle = '#8a7a66'; ctx.font = '12px monospace'; ctx.textAlign = 'center';
-  ctx.fillText('选择干员（1-4 键或点击 · 纯外观差异）', ROOM_W / 2, 236);
+  ctx.fillText('选择干员（点击卡片 / 1-4 键 · 纯外观差异）', ROOM_W / 2, 222);
   const cz = charZones();
   CHARS.forEach((ch, i) => {
     const z = cz[i], sel = (Meta.load().char || 0) === i;
-    ctx.fillStyle = sel ? 'rgba(60,44,26,.95)' : 'rgba(24,18,12,.85)';
-    ctx.beginPath(); ctx.roundRect(z.x, z.y, z.w, z.h, 7); ctx.fill();
-    ctx.strokeStyle = sel ? '#e8c85e' : '#4a3a2a'; ctx.lineWidth = sel ? 2.4 : 1.4;
-    ctx.beginPath(); ctx.roundRect(z.x, z.y, z.w, z.h, 7); ctx.stroke();
-    ctx.save(); ctx.translate(z.x + z.w / 2, z.y + 34); ctx.scale(1.5, 1.5);
-    drawPlayer(ctx, { x: 0, y: -HUD_H, inv: 0, anim: 0, moving: false, aim: { x: 0, y: 1 }, shotsPerDir: 1, char: i }, t);
+    const gd = ctx.createLinearGradient(0, z.y, 0, z.y + z.h);
+    gd.addColorStop(0, sel ? 'rgba(74,54,30,.97)' : 'rgba(28,21,14,.9)');
+    gd.addColorStop(1, sel ? 'rgba(38,27,14,.97)' : 'rgba(14,10,7,.9)');
+    ctx.fillStyle = gd;
+    ctx.beginPath(); ctx.roundRect(z.x, z.y, z.w, z.h, 9); ctx.fill();
+    ctx.strokeStyle = sel ? '#e8c85e' : '#4a3a2a'; ctx.lineWidth = sel ? 2.6 : 1.4;
+    ctx.beginPath(); ctx.roundRect(z.x, z.y, z.w, z.h, 9); ctx.stroke();
+    if (sel) { // 选中角标
+      ctx.fillStyle = '#e8c85e'; ctx.beginPath(); ctx.arc(z.x + z.w - 12, z.y + 12, 4, 0, TAU); ctx.fill();
+    }
+    ctx.save(); ctx.translate(z.x + z.w / 2, z.y + 52); ctx.scale(2.1, 2.1);
+    drawPlayer(ctx, { x: 0, y: 0, inv: 0, anim: 0, moving: false, aim: { x: .55, y: -.35 }, shotsPerDir: 1, char: i }, t);
     ctx.restore();
-    ctx.fillStyle = sel ? '#e8c85e' : '#8a7a66'; ctx.font = '11px monospace'; ctx.textAlign = 'center';
-    ctx.fillText(ch.name, z.x + z.w / 2, z.y + z.h - 6);
+    ctx.fillStyle = sel ? '#e8c85e' : '#b0a08a'; ctx.font = 'bold 13px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(ch.name, z.x + z.w / 2, z.y + z.h - 22);
+    ctx.fillStyle = '#6a5c4c'; ctx.font = '9px monospace';
+    ctx.fillText(ch.title, z.x + z.w / 2, z.y + z.h - 8);
   });
 
   // 脚下血泊与泪迹
@@ -620,8 +662,8 @@ function drawTitle() {
   // 本局主题预告（随机于开局）
   ctx.fillStyle = '#5a6472'; ctx.font = '12px monospace'; ctx.textAlign = 'center';
   ctx.fillText('本局行动区域随机 · 逐层深入解救人质', ROOM_W / 2, 366);
-  const fly = { cfg: ETYPE.fly, x: ROOM_W / 2 + Math.cos(t * .04) * 150, y: 205 + Math.sin(t * .04) * 18, r: 12, flash: 0, spawnT: 0 };
-  const fly2 = { cfg: ETYPE.attackfly, x: ROOM_W / 2 + Math.cos(t * .05 + 3) * 190, y: 222 + Math.sin(t * .03 + 2) * 14, r: 11, flash: 0, spawnT: 0 };
+  const fly = { cfg: ETYPE.fly, x: ROOM_W / 2 + Math.cos(t * .04) * 150, y: 190 + Math.sin(t * .04) * 10, r: 12, flash: 0, spawnT: 0 };
+  const fly2 = { cfg: ETYPE.attackfly, x: ROOM_W / 2 + Math.cos(t * .05 + 3) * 190, y: 202 + Math.sin(t * .03) * 8, r: 11, flash: 0, spawnT: 0 };
   drawEnemy(ctx, fly, t); drawEnemy(ctx, fly2, t);
 
   // 提示

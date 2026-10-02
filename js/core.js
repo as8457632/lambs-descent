@@ -92,6 +92,15 @@ const META_UPS = [
   { id: 'revive', name: '亡者残响', desc: '每局死亡时原地复活一次（2心起步）', cost: [500], max: 1, c: '#b093e8' },
 ];
 
+// ── 拦截浏览器缩放：游戏误触的第二根手指不该触发捏合/双击缩放（iOS 无视 user-scalable=no）──
+['gesturestart', 'gesturechange', 'gestureend'].forEach(ev => document.addEventListener(ev, e => e.preventDefault()));
+let __lastTap = 0;
+document.addEventListener('touchend', e => {
+  const now = Date.now();
+  if (now - __lastTap < 320 && e.touches.length === 0) e.preventDefault();
+  __lastTap = now;
+}, { passive: false });
+
 // ── 触屏虚拟摇杆 ──
 const Touch = {
   sticks: { move: null, aim: null }, bombTap: false, active: false, btn: null, pauseBtn: null, muteBtn: null, muteTap: false,

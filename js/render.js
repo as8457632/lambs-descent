@@ -1290,6 +1290,8 @@ function drawSidePanel(ctx, g) {
   // 魂存量
   ctx.fillStyle = '#b093e8'; ctx.font = '10px monospace'; ctx.textAlign = 'right';
   ctx.fillText(`魂 ${Meta.load().souls}`, x0 + PANEL_W - 12, 82);
+  ctx.fillStyle = 'rgba(138,115,96,.5)'; ctx.font = '9px monospace';
+  ctx.fillText(BUILD, x0 + PANEL_W - 6, CANVAS_H - 5); // 版本水印：截图即可判断新旧缓存
   ctx.textAlign = 'left';
   // 当前武器行
   const wd = WEAPONS[p.weapon ? p.weapon.id : 'tear'];

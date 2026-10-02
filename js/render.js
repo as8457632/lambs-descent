@@ -1265,9 +1265,7 @@ function drawMinimapAt(ctx, g, mx, my) {
       ctx.strokeStyle = '#8a3a30'; ctx.lineWidth = 2; ctx.strokeRect(x + 1, y + 1, cell - 2, cell - 2);
     }
     if (room.type === 'boss' && room.visited) {
-      ctx.fillStyle = room === g.cur ? '#5a2620' : '#f2d8d0';
-      ctx.font = '12px monospace'; ctx.textAlign = 'center';
-      ctx.fillText('☠', x + cell / 2, y + cell - 4);
+      drawSkull(ctx, x + cell / 2, y + cell / 2, cell * .32);
     }
   }
 }

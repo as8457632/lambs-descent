@@ -85,3 +85,14 @@ body {
 #game.rot:fullscreen { transform: translate(-50%, -50%) rotate(90deg); }
 
 #fsbtn { z-index: 40; position: relative; } /* 强制横屏时按钮不被 fixed 画布盖住 */
+
+/* 强制横屏中：退出按钮贴屏幕底缘居中，浮在旋转画布之上，不再悬在战场中间 */
+body.rot #fsbtn {
+  position: fixed;
+  bottom: 14px; left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: inline-block;
+}
+
+:fullscreen body.rot #fsbtn, :-webkit-full-screen body.rot #fsbtn { display: inline-block !important; } /* 全屏+强制横屏时保留退出入口 */

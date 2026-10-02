@@ -17,7 +17,7 @@ const game = {
 function shake(n) { game.shakeAmt = Math.max(game.shakeAmt, n); }
 
 let cv, cx;
-const BUILD = 'v2.1'; // 版本号水印：确认玩家加载的是否为最新构建
+const BUILD = 'v2.2'; // 版本号水印：确认玩家加载的是否为最新构建
 window.__BUILD = BUILD;
 window.DBG_VP = () => ({ build: BUILD, inner: [innerWidth, innerHeight], vv: window.visualViewport ? [Math.round(visualViewport.width), Math.round(visualViewport.height)] : null, dpr: devicePixelRatio, css: [Math.round(cv ? cv.getBoundingClientRect().width : 0), Math.round(cv ? cv.getBoundingClientRect().height : 0)] });
 
@@ -72,15 +72,29 @@ function boot() {
         const vv = window.visualViewport;
         return Math.max(vv ? vv.height : 0, innerHeight) > Math.max(vv ? vv.width : 0, innerWidth);
       };
-      if (game.rotMode) { game.rotMode = false; cv.classList.remove('rot'); fitCanvas(); return; }
-      const lock = () => {
-        try { const so = screen.orientation; if (so && so.lock) so.lock('landscape').then(() => { }).catch(() => { if (portrait()) enterRot(); }); } catch (e) { if (portrait()) enterRot(); }
+      const setRot = on => {
+        game.rotMode = on;
+        cv.classList.toggle('rot', on);
+        document.body.classList.toggle('rot', on); // 让退出按钮浮到画布之上、贴屏幕底缘
+        fitCanvas();
       };
-      const enterRot = () => { game.rotMode = true; cv.classList.add('rot'); fitCanvas(); };
-      if (Touch.supported() && portrait()) { enterRot(); return; } // 系统旋转锁死/不支持 lock：CSS 旋转兜底
-      if (el.requestFullscreen) el.requestFullscreen().then(lock).catch(() => { if (portrait()) enterRot(); });
-      else if (el.webkitRequestFullscreen) { el.webkitRequestFullscreen(); lock(); }
-      else if (portrait()) enterRot();
+      const goFs = () => {
+        try { const r = (el.requestFullscreen || el.webkitRequestFullscreen).call(el); if (r && r.catch) r.catch(() => { }); } catch (e) { }
+      };
+      if (game.rotMode) { // 退出：解除旋转 + 退出全屏
+        setRot(false);
+        if (document.fullscreenElement || document.webkitFullscreenElement) (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+        return;
+      }
+      if (Touch.supported() && portrait()) { goFs(); setRot(true); return; } // 手机竖屏：全屏(收地址栏)+CSS旋转双管齐下，画布铺满
+      goFs();
+      setTimeout(() => {
+        try {
+          const so = screen.orientation;
+          if (so && so.lock) so.lock('landscape').catch(() => { if (portrait()) setRot(true); });
+          else if (portrait()) setRot(true);
+        } catch (e) { if (portrait()) setRot(true); }
+      }, 350);
     });
   }
   window.game = game;                       // 调试接口：HP/敌人/子弹/房间/道具/属性

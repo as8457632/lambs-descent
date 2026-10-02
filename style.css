@@ -73,3 +73,13 @@ body {
   user-select: none;
 }
 #help b { color: #8a7360; }
+
+/* 强制横屏：竖屏设备把画布旋转90°铺满，配合 Touch 坐标逆变换实现"假横屏" */
+#game.rot {
+  position: fixed;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%) rotate(90deg);
+  z-index: 10;
+  box-shadow: none; border-radius: 0;
+}
+#game.rot:fullscreen { transform: translate(-50%, -50%) rotate(90deg); }

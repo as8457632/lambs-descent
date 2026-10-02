@@ -17,7 +17,7 @@ const game = {
 function shake(n) { game.shakeAmt = Math.max(game.shakeAmt, n); }
 
 let cv, cx;
-const BUILD = 'v1.0.5'; // 版本号水印：确认玩家加载的是否为最新构建
+const BUILD = 'v2.0'; // 版本号水印：确认玩家加载的是否为最新构建
 window.__BUILD = BUILD;
 window.DBG_VP = () => ({ build: BUILD, inner: [innerWidth, innerHeight], vv: window.visualViewport ? [Math.round(visualViewport.width), Math.round(visualViewport.height)] : null, dpr: devicePixelRatio, css: [Math.round(cv ? cv.getBoundingClientRect().width : 0), Math.round(cv ? cv.getBoundingClientRect().height : 0)] });
 
@@ -36,13 +36,18 @@ function boot() {
     // visualViewport 在捏合缩放/平板桌面模式怪癖下可能远小于布局视口 → 取两者较大值，画布永不被压成小方块
     const w = Math.max(vv ? vv.width : 0, window.innerWidth || 0) || CANVAS_W;
     const h = Math.max(vv ? vv.height : 0, window.innerHeight || 0) || CANVAS_H;
-    const s = Math.min(w / CANVAS_W, h / CANVAS_H);
+    // 强制横屏：竖屏里把画布 CSS 旋转90°，此时 CANVAS_W 沿屏幕纵向铺放
+    const s = game.rotMode ? Math.min(h / CANVAS_W, w / CANVAS_H) : Math.min(w / CANVAS_W, h / CANVAS_H);
+    game.rotScale = s;
     const cw = Math.floor(CANVAS_W * s) + 'px', chh = Math.floor(CANVAS_H * s) + 'px';
     if (cv.style.width !== cw) cv.style.width = cw;
     if (cv.style.height !== chh) cv.style.height = chh;
     game.fitScale = s;
     const fsb = document.getElementById('fsbtn');
-    if (fsb) fsb.classList.toggle('show', s < .74); // 窗口偏小时桌面/横屏也显示全屏按钮
+    if (fsb) {
+      fsb.classList.toggle('show', s < .74 || (Touch.supported() && h > w)); // 竖屏手机常驻：那是"强制横屏"入口
+      fsb.textContent = game.rotMode ? '⛶ 退出横屏' : (Touch.supported() && h > w ? '⛶ 强制横屏' : '⛶ 全屏横屏');
+    }
   }
   window.__fitCanvas = fitCanvas;
   addEventListener('resize', () => { fitCanvas(); setTimeout(fitCanvas, 300); }); // 过渡态双保险
@@ -63,11 +68,19 @@ function boot() {
       fsb.style.fontSize = '12px';
     }
     fsb.addEventListener('click', () => {
-      const lock = () => {
-        try { const so = screen.orientation; if (so && so.lock) so.lock('landscape').catch(() => { }); } catch (e) { }
+      const portrait = () => {
+        const vv = window.visualViewport;
+        return Math.max(vv ? vv.height : 0, innerHeight) > Math.max(vv ? vv.width : 0, innerWidth);
       };
-      if (el.requestFullscreen) el.requestFullscreen().then(lock).catch(() => { });
+      if (game.rotMode) { game.rotMode = false; cv.classList.remove('rot'); fitCanvas(); return; }
+      const lock = () => {
+        try { const so = screen.orientation; if (so && so.lock) so.lock('landscape').then(() => { }).catch(() => { if (portrait()) enterRot(); }); } catch (e) { if (portrait()) enterRot(); }
+      };
+      const enterRot = () => { game.rotMode = true; cv.classList.add('rot'); fitCanvas(); };
+      if (Touch.supported() && portrait()) { enterRot(); return; } // 系统旋转锁死/不支持 lock：CSS 旋转兜底
+      if (el.requestFullscreen) el.requestFullscreen().then(lock).catch(() => { if (portrait()) enterRot(); });
       else if (el.webkitRequestFullscreen) { el.webkitRequestFullscreen(); lock(); }
+      else if (portrait()) enterRot();
     });
   }
   window.game = game;                       // 调试接口：HP/敌人/子弹/房间/道具/属性
@@ -98,7 +111,9 @@ function boot() {
 function newRun() {
   game.floorNum = 1;
   game.kills = 0; game.roomsSeen = 0; game.runTime = 0;
+  game.theme = choice(THEMES);
   game.player = new Player(ROOM_W / 2, ROOM_H / 2);
+  game.player.char = Meta.load().char || 0;
   game.particles = []; game.toast = null;
   game.taughtClear = false; game.taughtWeapon = false; game.lastKiller = null; game.hint = null;
   // 应用局间永久强化（锻造工坊）
@@ -108,11 +123,11 @@ function newRun() {
   p.maxHearts += 2 * m.up.hp; p.hearts = p.maxHearts;
   p.speed += .15 * m.up.spd;
   p.coins += 3 * m.up.coin;
-  p.bombs += m.up.bomb;
+  p.dashCdMax = Math.max(24, p.dashCdMax - 10 * m.up.dash);
   game.reviveAvail = m.up.revive > 0;
   game.soulsRun = 0; game.levelUps = 0; game.pendingLevelUps = 0; game.levelChoices = null;
   Touch.sticks.move = Touch.sticks.aim = null;
-  Touch.bombTap = false; Touch.tapped = false; Touch.menuTap = null; Touch.startedInPlay.clear();
+  Touch.dashTap = false; Touch.tapped = false; Touch.menuTap = null; Touch.startedInPlay.clear();
   loadFloor(1);
   game.state = 'play'; game.paused = false;
   BGM.start();
@@ -167,7 +182,7 @@ function enterRoom(room, fromDir) {
   game.particles = [];
   game.fx = [];
   if (!room.visited) { room.visited = true; game.roomsSeen++; }
-  room.tears = []; // 敌方弹幕进房即散；炸弹不再清除（防"穿门洗弹"）
+  room.tears = []; // 敌方弹幕进房即散
 
   let ex = ROOM_W / 2, ey = ROOM_H / 2;
   if (fromDir) {
@@ -203,10 +218,15 @@ function update() {
   }
   if (game.state === 'title') {
     const mt = Touch.menuTap; Touch.menuTap = null;
+    const m = Meta.load();
+    for (let i = 0; i < CHARS.length; i++) {
+      if (Input.pressed('Digit' + (i + 1)) || (mt && inZone(mt, charZones()[i]))) { m.char = i; Meta.save(); SFX.play('coin'); }
+    }
     if (Input.pressed('Enter')) newRun();
     else if (Input.pressed('KeyS')) { game.workshopFrom = 'title'; game.state = 'workshop'; }
     else if (mt && inZone(mt, workshopBtnZone())) { game.workshopFrom = 'title'; game.state = 'workshop'; }
-    else if (mt || Touch.tapped) newRun();
+    else if (mt && !CHARS.some((_, i) => inZone(mt, charZones()[i]))) newRun(); // 点选人区外才开局
+    else if (Touch.tapped) newRun();
     Touch.tapped = false;
     return;
   }
@@ -274,7 +294,6 @@ function update() {
   if (room.boss && !room.boss.dead) room.boss.update(room);
   const tearN = room.tears.length; // 快照长度迭代：分裂弹 push 不再同帧二次更新
   for (let i = 0; i < tearN; i++) room.tears[i].update(room);
-  updateBombs(room);
   for (const pk of room.pickups) if (!pk.dead) pk.update(room);
 
   handleCollisions(room);
@@ -372,6 +391,11 @@ function onRoomCleared(room) {
     else room.finalChest = true;
   } else {
     rollClearReward(room, game.floorNum);
+    if (room.type === 'normal' && !game.floor.gaveStarter) {
+      game.floor.gaveStarter = true;
+      game.cur.pickups.push(new Pickup('weapon', ROOM_W / 2 + rand(-40, 40), ROOM_H / 2 + rand(-30, 30), null, 0, pickWeaponId(game.player)));
+      game.hint = { text: '拾取武器：同一把枪再捡会升级，换枪会归零', t: 240 };
+    }
   }
 }
 
@@ -417,13 +441,12 @@ function draw() {
   if (game.state === 'title') { drawTitle(); return; }
   if (game.state === 'workshop') { drawWorkshop(cx, game); return; }
 
-  const pal = FLOOR_PAL[game.floorNum - 1];
+  const pal = themePal(game.theme || THEMES[0], game.floorNum);
   cx.save();
   if (game.shakeAmt > .5) cx.translate(rand(-game.shakeAmt, game.shakeAmt), rand(-game.shakeAmt, game.shakeAmt));
 
   drawRoom(cx, game.cur, pal, game.time);
   for (const pk of game.cur.pickups) if (!pk.dead) drawPickup(cx, pk, game.time);
-  for (const b of game.cur.bombs) if (!b.dead) drawBombEnt(cx, b, game.time);
   for (const e of game.cur.enemies) drawEnemy(cx, e, game.time);
   if (game.cur.boss && !game.cur.boss.dead) drawBoss(cx, game.cur.boss, game.time);
   if (!(game.state === 'dead')) drawPlayer(cx, game.player, game.time);
@@ -518,33 +541,49 @@ function drawTitle() {
   ctx.translate(ROOM_W / 2, 122);
   ctx.fillStyle = '#120808';
   ctx.font = 'bold 64px monospace'; ctx.textAlign = 'center';
-  ctx.fillText('羔羊深渊', 3, 5);
-  ctx.fillStyle = '#a8281e';
-  ctx.fillText('羔羊深渊', 0, 0);
-  // 标题滴血
-  ctx.fillStyle = '#8a1e16';
-  for (let i = 0; i < 5; i++) {
-    const x = -120 + i * 60 + Math.sin(i * 7) * 20;
-    const len = 14 + ((t * .02 + i * 33) % 40);
-    ctx.fillRect(x, 12, 4, len);
-    ctx.beginPath(); ctx.arc(x + 2, 12 + len, 3, 0, TAU); ctx.fill();
+  ctx.fillText('解救行动', 3, 5);
+  ctx.fillStyle = '#c98f2e';
+  ctx.fillText('解救行动', 0, 0);
+  // 标题火星飞散
+  ctx.fillStyle = '#e8b24a';
+  for (let i = 0; i < 6; i++) {
+    const x = -130 + i * 52 + Math.sin(i * 5) * 16;
+    const y = 14 + ((t * .05 + i * 27) % 34);
+    ctx.globalAlpha = clamp(1 - (y - 14) / 34, 0, 1) * .8;
+    ctx.beginPath(); ctx.arc(x, y, 1.8, 0, TAU); ctx.fill();
   }
+  ctx.globalAlpha = 1;
   ctx.restore();
-  ctx.fillStyle = '#6b5a4a'; ctx.font = '16px monospace'; ctx.textAlign = 'center';
-  ctx.fillText('L A M B S :  D E S C E N T', ROOM_W / 2, 158);
-  ctx.fillStyle = '#584838'; ctx.font = '12px monospace';
-  ctx.fillText('— 一个以撒式随机地牢射击冒险 —', ROOM_W / 2, 180);
+  ctx.fillStyle = '#8a9ab0'; ctx.font = '16px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('O P E R A T I O N :   R E S C U E', ROOM_W / 2, 158);
+  ctx.fillStyle = '#5a6472'; ctx.font = '12px monospace';
+  ctx.fillText('— 突入敌楼，逐层清剿，解救人质 —', ROOM_W / 2, 180);
+
+  // 角色选择行（4 个可选干员，纯外观；点击/数字键 1-4 选择）
+  ctx.fillStyle = '#8a7a66'; ctx.font = '12px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('选择干员', ROOM_W / 2, 236);
+  const cz = charZones();
+  CHARS.forEach((ch, i) => {
+    const z = cz[i], sel = (Meta.load().char || 0) === i;
+    ctx.fillStyle = sel ? 'rgba(60,44,26,.95)' : 'rgba(24,18,12,.85)';
+    ctx.beginPath(); ctx.roundRect(z.x, z.y, z.w, z.h, 7); ctx.fill();
+    ctx.strokeStyle = sel ? '#e8c85e' : '#4a3a2a'; ctx.lineWidth = sel ? 2.4 : 1.4;
+    ctx.beginPath(); ctx.roundRect(z.x, z.y, z.w, z.h, 7); ctx.stroke();
+    ctx.save(); ctx.translate(z.x + z.w / 2, z.y + 34); ctx.scale(1.5, 1.5);
+    drawPlayer(ctx, { x: 0, y: -HUD_H, inv: 0, anim: 0, moving: false, aim: { x: 0, y: 1 }, shotsPerDir: 1, char: i }, t);
+    ctx.restore();
+    ctx.fillStyle = sel ? '#e8c85e' : '#8a7a66'; ctx.font = '11px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(ch.name, z.x + z.w / 2, z.y + z.h - 6);
+  });
 
   // 脚下血泊与泪迹
   ctx.fillStyle = 'rgba(70,10,10,.55)';
   ctx.beginPath(); ctx.ellipse(ROOM_W / 2, 378, 62, 13, .06, 0, TAU); ctx.fill();
   ctx.fillStyle = 'rgba(140,190,255,.18)';
   ctx.beginPath(); ctx.ellipse(ROOM_W / 2 + 30, 384, 16, 4, 0, 0, TAU); ctx.fill();
-  // 2.2 倍大主角
-  ctx.save();
-  ctx.translate(ROOM_W / 2, 348); ctx.scale(2.2, 2.2);
-  drawPlayer(ctx, { x: 0, y: -HUD_H, inv: 0, anim: 0, moving: false, aim: { x: 0, y: 1 }, shotsPerDir: 1 }, t);
-  ctx.restore();
+  // 本局主题预告（随机于开局）
+  ctx.fillStyle = '#5a6472'; ctx.font = '12px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('本局行动区域随机 · 逐层深入解救人质', ROOM_W / 2, 366);
   const fly = { cfg: ETYPE.fly, x: ROOM_W / 2 + Math.cos(t * .04) * 150, y: 250 + Math.sin(t * .04) * 40, r: 12, flash: 0, spawnT: 0 };
   drawEnemy(ctx, fly, t);
   const fly2 = { cfg: ETYPE.attackfly, x: ROOM_W / 2 + Math.cos(t * .05 + 3) * 190, y: 300 + Math.sin(t * .03 + 2) * 30, r: 11, flash: 0, spawnT: 0 };
@@ -553,11 +592,11 @@ function drawTitle() {
   // 提示
   if (Math.floor(t / 32) % 2 === 0) {
     cx.fillStyle = '#e0d0b8'; cx.font = 'bold 20px monospace';
-    cx.fillText(Touch.supported() ? '轻触屏幕 开始逃亡' : '按 Enter 开始逃亡', ROOM_W / 2, 424);
+    cx.fillText(Touch.supported() ? '轻触屏幕 开始行动' : '按 Enter 开始行动', ROOM_W / 2, 424);
   }
   drawWorkshopBtn(cx, game);
   cx.fillStyle = '#8a7a66'; cx.font = '12px monospace';
-  cx.fillText(Touch.supported() ? '左摇杆移动 · 右摇杆射击 · 打怪升级三选一 · 攒魂进工坊' : 'WASD 移动 · 方向键射击 · E 炸弹 · 打怪升级三选一 · 攒魂进工坊', ROOM_W / 2, 490);
+  cx.fillText(Touch.supported() ? '左摇杆移动 · 右摇杆射击 · 打怪升级三选一 · 攒魂进工坊' : 'WASD 移动 · 方向键射击 · Space 冲刺 · 打怪升级三选一 · 攒魂进工坊', ROOM_W / 2, 490);
   ctx.restore(); // 归还标题居中变换
   cx.fillStyle = 'rgba(138,115,96,.55)'; cx.font = '10px monospace'; cx.textAlign = 'right';
   cx.fillText(BUILD, CANVAS_W - 6, CANVAS_H - 6); cx.textAlign = 'left';
@@ -567,7 +606,7 @@ function statLines() {
   const p = game.player;
   const sec = Math.floor(game.runTime / 60);
   return [
-    `到达层数：${FLOOR_PAL[game.floorNum - 1].name}`,
+    `突入区域：${game.theme ? game.theme.floors[game.floorNum - 1] : ''}`,
     `击杀：${game.kills}    探索房间：${game.roomsSeen}`,
     `拾取道具：${p ? p.items.length : 0} 个    存活时间：${Math.floor(sec / 60)}分${sec % 60}秒`,
   ];
@@ -578,7 +617,7 @@ function drawDeathScreen() {
   cx.fillRect(0, 0, CANVAS_W, CANVAS_H);
   cx.save(); cx.translate(PANEL_W / 2, 0);
   cx.fillStyle = '#c4303a'; cx.font = 'bold 58px monospace'; cx.textAlign = 'center';
-  cx.fillText('你 死 了', ROOM_W / 2, 170);
+  cx.fillText('行 动 失 败', ROOM_W / 2, 170);
   cx.fillStyle = '#8a5a4a'; cx.font = '15px monospace';
   statLines().forEach((s, i) => cx.fillText(s, ROOM_W / 2, 240 + i * 26));
   cx.fillStyle = '#c46a5a'; cx.font = '13px monospace';
@@ -604,7 +643,7 @@ function drawWinScreen() {
   cx.fillRect(0, 0, CANVAS_W, CANVAS_H);
   cx.save(); cx.translate(PANEL_W / 2, 0);
   cx.fillStyle = '#e8c85e'; cx.font = 'bold 46px monospace'; cx.textAlign = 'center';
-  cx.fillText('你 逃 出 了 深 渊', ROOM_W / 2, 170);
+  cx.fillText('人 质 解 救 成 功', ROOM_W / 2, 170);
   cx.fillStyle = '#9a8a5a'; cx.font = '15px monospace';
   statLines().forEach((s, i) => cx.fillText(s, ROOM_W / 2, 240 + i * 26));
   cx.fillStyle = '#b093e8'; cx.font = 'bold 14px monospace';

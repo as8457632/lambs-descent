@@ -27,7 +27,7 @@ const Input = {
   keys: new Set(), edge: new Set(), _tap: new Set(),
   init() {
     const blocked = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space',
-      'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyE', 'KeyR', 'KeyP', 'Enter',
+      'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyE', 'KeyR', 'KeyP', 'Enter', 'Tab',
       'Digit1', 'Digit2', 'Digit3', 'Escape'];
     addEventListener('keydown', e => {
       if (blocked.includes(e.code)) e.preventDefault();
@@ -149,7 +149,7 @@ document.addEventListener('touchend', e => {
 
 // ── 触屏虚拟摇杆 ──
 const Touch = {
-  sticks: { move: null, aim: null }, dashTap: false, active: false, btn: null, pauseBtn: null, muteBtn: null, muteTap: false,
+  sticks: { move: null, aim: null }, dashTap: false, active: false, btn: null, pauseBtn: null, muteBtn: null, muteTap: false, mapBtn: null, mapTap: false, drag: null,
   tapped: false, menuTap: null, // menuTap：菜单态（升级/工坊）消费的点选坐标
   startedInPlay: new Set(), // 按下时仍处于战斗的手指 id，抬手不触发菜单确认
   supported() { return 'ontouchstart' in window || navigator.maxTouchPoints > 0; },
@@ -157,6 +157,7 @@ const Touch = {
     const btn = this.btn = { x: ROOM_W - 56, y: CANVAS_H - 150, r: 30 };
     const pbtn = this.pauseBtn = { x: ROOM_W - 56, y: CANVAS_H - 240, r: 22 };
     const mbtn = this.muteBtn = { x: ROOM_W - 56, y: CANVAS_H - 302, r: 20 };
+    const gbtn = this.mapBtn = { x: ROOM_W - 56, y: CANVAS_H - 360, r: 20 };
     const pts = e => {
       const r = cv.getBoundingClientRect();
       if (game.rotOn) { // CSS rotate(90deg)：屏幕(y向下) → 画布逻辑坐标的逆旋转
@@ -174,7 +175,13 @@ const Touch = {
     };
     cv.addEventListener('touchstart', e => {
       e.preventDefault(); this.active = true; SFX.ensure();
+      if (game.mapOpen) { // 大地图层：单指拖动=平移，轻点=回中，不再生成摇杆
+        const q = pts(e)[0];
+        if (q) this.drag = { id: q.id, x: q.x, y: q.y, moved: 0 };
+        return;
+      }
       for (const p of pts(e)) {
+        if (Math.hypot(p.x - gbtn.x, p.y - gbtn.y) < gbtn.r + 8) { this.mapTap = true; continue; }
         if (game.state === 'play') this.startedInPlay.add(p.id); // 战斗中按下的手指，抬起时不得触发菜单确认
         if (Math.hypot(p.x - pbtn.x, p.y - pbtn.y) < pbtn.r + 8) { this.pauseTap = true; continue; }
         if (Math.hypot(p.x - mbtn.x, p.y - mbtn.y) < mbtn.r + 8) { this.muteTap = true; continue; }
@@ -187,12 +194,28 @@ const Touch = {
     }, { passive: false });
     cv.addEventListener('touchmove', e => {
       e.preventDefault();
+      if (game.mapOpen && this.drag) {
+        for (const p of pts(e)) if (p.id === this.drag.id) {
+          game.mapCam.x -= p.x - this.drag.x; game.mapCam.y -= p.y - this.drag.y;
+          this.drag.moved += Math.abs(p.x - this.drag.x) + Math.abs(p.y - this.drag.y);
+          this.drag.x = p.x; this.drag.y = p.y; game.mapAuto = false;
+        }
+        return;
+      }
       for (const p of pts(e)) for (const s of ['move', 'aim']) {
         const st = this.sticks[s];
         if (st && st.id === p.id) { st.x = p.x; st.y = p.y; }
       }
     }, { passive: false });
     const end = e => {
+      if (game.mapOpen && this.drag) {
+        for (const p of pts(e)) if (p.id === this.drag.id) {
+          if (this.drag.moved < 14) game.mapAuto = true; // 轻点回中
+          this.drag = null;
+        }
+        if (this.drag && ![...e.changedTouches].some(t => t.identifier === this.drag.id)) this.drag = null;
+        return;
+      }
       for (const p of pts(e)) {
         if (this.startedInPlay.has(p.id)) { this.startedInPlay.delete(p.id); continue; } // 战斗期按住摇杆的手指抬起，不触发结算屏/菜单重开
         this.tapped = true; this.menuTap = { x: p.x, y: p.y };
@@ -223,12 +246,23 @@ const Touch = {
     cv.addEventListener('mousedown', e => {
       SFX.ensure();
       const r = cv.getBoundingClientRect();
+      if (game.mapOpen) { this.drag = { x: e.clientX, y: e.clientY, moved: 0 }; return; }
       if (game.rotOn) {
         const s = r.height / CANVAS_W, cxp = r.left + r.width / 2, cyp = r.top + r.height / 2;
         this.menuTap = { x: CANVAS_W / 2 + (e.clientY - cyp) / s, y: CANVAS_H / 2 - (e.clientX - cxp) / s };
       } else {
         this.menuTap = { x: (e.clientX - r.left) * (CANVAS_W / r.width), y: (e.clientY - r.top) * (CANVAS_H / r.height) };
       }
+    });
+    addEventListener('mousemove', e => {
+      if (!game.mapOpen || !this.drag) return;
+      const r = cv.getBoundingClientRect(), k = CANVAS_W / r.width;
+      game.mapCam.x -= (e.clientX - this.drag.x) * k; game.mapCam.y -= (e.clientY - this.drag.y) * k;
+      this.drag.moved += Math.abs(e.clientX - this.drag.x) + Math.abs(e.clientY - this.drag.y);
+      this.drag.x = e.clientX; this.drag.y = e.clientY; game.mapAuto = false;
+    });
+    addEventListener('mouseup', () => {
+      if (game.mapOpen && this.drag) { if (this.drag.moved < 8) game.mapAuto = true; this.drag = null; }
     });
   },
   vector(side) {

@@ -1282,6 +1282,8 @@ function drawVignette(ctx, g) {
 
 // ── 菜单区域（触摸点选判定）──
 function inZone(p, z) { return z && p.x >= z.x && p.x <= z.x + z.w && p.y >= z.y && p.y <= z.y + z.h; }
+function minimapZone() { return { x: ROOM_W + 12, y: 88, w: PANEL_W - 24, h: 148 }; } // 点侧栏小地图 → 放大地图
+function mapCloseZone() { return { x: CANVAS_W - 46, y: HUD_H + 6, w: 38, h: 38 }; }
 // 标题/结算页绘制时 translate(PANEL_W/2)，命中区需同步平移到屏幕真实坐标
 function workshopBtnZone() { return { x: CANVAS_W / 2 - 96 + PANEL_W / 2, y: 444, w: 192, h: 32 }; }
 function charZones() {
@@ -1484,6 +1486,93 @@ function drawSidePanel(ctx, g) {
   ctx.restore();
 }
 
+// ── 全层大地图：远超一屏，拖动平移，迷雾随探索揭开，玩家光点实时定位 ──
+function drawFloorMap(ctx, g) {
+  const cell = 150, gap = 18, step = cell + gap, GW = 7, GH = 7;
+  const mapW = GW * step - gap, mapH = GH * step - gap;
+  const viewW = CANVAS_W, viewH = CANVAS_H - HUD_H;
+  if (!g.mapCam) g.mapCam = { x: mapW / 2, y: mapH / 2 };
+  const cur = g.cur;
+  if (g.mapAuto) {
+    const tx = cur.gx * step + cell / 2, ty = cur.gy * step + cell / 2;
+    g.mapCam.x += (tx - g.mapCam.x) * .16; g.mapCam.y += (ty - g.mapCam.y) * .16;
+  }
+  g.mapCam.x = clamp(g.mapCam.x, viewW / 2, mapW - viewW / 2);
+  g.mapCam.y = clamp(g.mapCam.y, viewH / 2, mapH - viewH / 2);
+  const t = g.time;
+
+  ctx.fillStyle = '#080605'; ctx.fillRect(0, 0, CANVAS_W, CANVAS_H); // 完全不透明，杜绝战场/侧栏透出
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, HUD_H, viewW, viewH); ctx.clip();
+  ctx.translate(Math.round(viewW / 2 - g.mapCam.x), Math.round(HUD_H + viewH / 2 - g.mapCam.y));
+
+  const known = room => room.visited || DIRS.some(d => room.links[d] && g.floor.rooms.get(room.links[d]).visited);
+  // 走廊（两端至少一端探明才画）
+  for (const room of g.floor.rooms.values()) {
+    if (!known(room)) continue;
+    const x = room.gx * step, y = room.gy * step;
+    for (const d of DIRS) {
+      const nb = room.links[d]; if (!nb) continue;
+      const r2 = g.floor.rooms.get(nb); if (!known(r2)) continue;
+      const [vx, vy] = DVEC[d];
+      ctx.fillStyle = 'rgba(120,96,66,.28)';
+      if (vx) ctx.fillRect(x + (vx > 0 ? cell : -gap), y + cell / 2 - 9, gap, 18);
+      else ctx.fillRect(x + cell / 2 - 9, y + (vy > 0 ? cell : -gap), 18, gap);
+    }
+  }
+  // 房间
+  for (const room of g.floor.rooms.values()) {
+    if (!known(room)) continue;
+    const x = room.gx * step, y = room.gy * step, seen = room.visited;
+    const d = clamp((room.dist || 0) / 4, 0, 1);
+    let fill = `rgb(${Math.round(52 + d * 74)},${Math.round(64 - d * 26)},${Math.round(44 - d * 8)})`;
+    if (room.type === 'boss') fill = '#6e2a22';
+    if (room.type === 'treasure') fill = '#6b5a26';
+    if (room.type === 'shop') fill = '#2e4a5a';
+    if (room.type === 'start') fill = '#3d5237';
+    ctx.globalAlpha = seen ? 1 : .32; // 战争迷雾：只闻其声未见其形 → 半透明剪影
+    ctx.fillStyle = seen ? fill : '#171310';
+    ctx.beginPath(); ctx.roundRect(x, y, cell, cell, 10); ctx.fill();
+    ctx.strokeStyle = room === cur ? '#ffe08a' : 'rgba(220,190,140,.35)';
+    ctx.lineWidth = room === cur ? 4 : 2;
+    ctx.beginPath(); ctx.roundRect(x, y, cell, cell, 10); ctx.stroke();
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#e8dcc0'; ctx.font = `bold ${seen ? 15 : 13}px monospace`;
+    const label = room.type === 'boss' ? '☠ Boss' : room.type === 'treasure' ? '★ 宝物' : room.type === 'shop' ? '$ 商店' : room.type === 'start' ? '入口' : '房 间';
+    ctx.fillText(label, x + cell / 2, y + 30);
+    if (seen && room.type === 'normal' && !room.cleared && room.quota) { // 未清房：配额进度实时呈现
+      ctx.fillStyle = 'rgba(0,0,0,.45)'; ctx.beginPath(); ctx.roundRect(x + 22, y + cell / 2 - 4, cell - 44, 12, 6); ctx.fill();
+      ctx.fillStyle = '#d9a92e'; ctx.beginPath(); ctx.roundRect(x + 22, y + cell / 2 - 4, (cell - 44) * clamp(room.killed / room.quota, 0, 1), 12, 6); ctx.fill();
+      ctx.fillStyle = '#f0e2c0'; ctx.font = 'bold 13px monospace';
+      ctx.fillText(`${Math.min(room.killed, room.quota)}/${room.quota}`, x + cell / 2, y + cell / 2 + 30);
+    } else if (seen && room.cleared) { ctx.fillStyle = 'rgba(160,220,140,.75)'; ctx.font = '26px monospace'; ctx.fillText('✓', x + cell / 2, y + cell / 2 + 10); }
+    if (!seen) { ctx.fillStyle = 'rgba(220,200,170,.8)'; ctx.font = '28px monospace'; ctx.fillText('?', x + cell / 2, y + cell / 2 + 10); }
+    ctx.globalAlpha = 1;
+  }
+  // 玩家光点：实时映射你在房间内的物理位置
+  {
+    const px = cur.gx * step + (g.player.x / ROOM_W) * cell;
+    const py = cur.gy * step + (g.player.y / ROOM_H) * cell;
+    const pr = 9 + Math.sin(t * .2) * 2.2;
+    ctx.fillStyle = 'rgba(140,220,255,.25)'; ctx.beginPath(); ctx.arc(px, py, pr + 8, 0, TAU); ctx.fill();
+    ctx.fillStyle = '#8ecbff'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(px, py, pr, 0, TAU); ctx.fill(); ctx.stroke();
+  }
+  ctx.restore();
+
+  // 边框 HUD：标题 / 关闭 / 图例
+  ctx.fillStyle = '#0e0a07'; ctx.fillRect(0, 0, CANVAS_W, HUD_H);
+  ctx.fillStyle = '#d8b878'; ctx.font = 'bold 20px monospace'; ctx.textAlign = 'left';
+  ctx.fillText(`${g.theme ? g.theme.name : ''} · ${themePal(g.theme || THEMES[0], g.floorNum).name} · 全图`, 16, 38);
+  const z = mapCloseZone();
+  ctx.fillStyle = 'rgba(60,40,26,.95)'; ctx.beginPath(); ctx.roundRect(z.x, z.y, z.w, z.h, 7); ctx.fill();
+  ctx.strokeStyle = '#b08a3a'; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.roundRect(z.x, z.y, z.w, z.h, 7); ctx.stroke();
+  ctx.fillStyle = '#e8c85e'; ctx.font = 'bold 20px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('×', z.x + z.w / 2, z.y + 26);
+  ctx.fillStyle = '#8a7360'; ctx.font = '12px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('拖动平移 · 轻点回中 · Tab / Esc 关闭 · ☠Boss ★宝物 $商店 ✓已清 ?未探索 · 颜色越红越危险', CANVAS_W / 2, CANVAS_H - 10);
+}
+
 // ── 触屏摇杆 UI ──
 function drawTouchUI(ctx, t) {
   ctx.save();
@@ -1518,6 +1607,11 @@ function drawTouchUI(ctx, t) {
   const pb = Touch.pauseBtn || { x: ROOM_W - 56, y: CANVAS_H - 240, r: 22 };
   ctx.beginPath(); ctx.arc(pb.x, pb.y, pb.r, 0, TAU); ctx.stroke();
   ctx.fillRect(pb.x - 7, pb.y - 9, 5, 18); ctx.fillRect(pb.x + 2, pb.y - 9, 5, 18);
+  // 地图小按钮（点开全层大地图）
+  const gb = Touch.mapBtn || { x: ROOM_W - 56, y: CANVAS_H - 360, r: 20 };
+  ctx.beginPath(); ctx.arc(gb.x, gb.y, gb.r, 0, TAU); ctx.stroke();
+  ctx.lineWidth = 2.4;
+  for (const [ox, oy] of [[-6, -6], [2, -6], [-6, 2], [2, 2]]) ctx.strokeRect(gb.x + ox, gb.y + oy, 6.4, 6.4);
   // 静音小按钮（移动端没有 M 键）
   const mb = Touch.muteBtn || { x: ROOM_W - 56, y: CANVAS_H - 302, r: 20 };
   ctx.beginPath(); ctx.arc(mb.x, mb.y, mb.r, 0, TAU); ctx.stroke();

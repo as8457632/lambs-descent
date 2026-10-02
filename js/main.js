@@ -17,7 +17,7 @@ const game = {
 function shake(n) { game.shakeAmt = Math.max(game.shakeAmt, n); }
 
 let cv, cx;
-const BUILD = 'v2.3'; // 版本号水印：确认玩家加载的是否为最新构建
+const BUILD = 'v2.4'; // 版本号水印：确认玩家加载的是否为最新构建
 window.__BUILD = BUILD;
 window.DBG_VP = () => ({ build: BUILD, inner: [innerWidth, innerHeight], vv: window.visualViewport ? [Math.round(visualViewport.width), Math.round(visualViewport.height)] : null, dpr: devicePixelRatio, css: [Math.round(cv ? cv.getBoundingClientRect().width : 0), Math.round(cv ? cv.getBoundingClientRect().height : 0)] });
 
@@ -151,7 +151,7 @@ function newRun() {
   Touch.sticks.move = Touch.sticks.aim = null;
   Touch.dashTap = false; Touch.tapped = false; Touch.menuTap = null; Touch.startedInPlay.clear();
   loadFloor(1);
-  game.state = 'play'; game.paused = false;
+  game.state = 'play'; game.paused = false; game.mapOpen = false;
   BGM.start();
 }
 
@@ -287,6 +287,15 @@ function update() {
   }
   if (Input.pressed('KeyP') || Touch.pauseTap) { game.paused = !game.paused; Touch.pauseTap = false; }
   if (Input.pressed('KeyM') || Touch.muteTap) { Touch.muteTap = false; game.bgmOn = BGM.toggle(); game.toastBgm = 90; }
+  // 全层大地图：Tab / 触屏🗺按钮 / 点侧栏小地图 开合；开启时世界暂停（地图本身持续动态刷新）
+  if (Input.pressed('Tab') || Touch.mapTap) { game.mapOpen = !game.mapOpen; game.mapAuto = true; Touch.mapTap = false; SFX.play('item'); }
+  const mt0 = Touch.menuTap;
+  if (game.mapOpen) {
+    Touch.menuTap = null; Touch.tapped = false;
+    if (Input.pressed('Escape') || (mt0 && inZone(mt0, mapCloseZone()))) game.mapOpen = false;
+    return;
+  }
+  if (mt0 && inZone(mt0, minimapZone())) { Touch.menuTap = null; game.mapOpen = true; game.mapAuto = true; SFX.play('item'); }
   if (game.paused) return;
 
   game.runTime++;
@@ -505,6 +514,7 @@ function draw() {
   drawVignette(cx, game);
   drawSidePanel(cx, game);
   if (game.state === 'levelup') drawLevelUp(cx, game);
+  if (game.state === 'play' && game.mapOpen) drawFloorMap(cx, game);
 
   // 受击红闪
   if (game.flashT > 0) {

@@ -6,7 +6,7 @@
 // ─────────────────────────────────────────────
 const CloudSave = {
   api: (location.search.match(/api=([^&]+)/) || [])[1] || localStorage.getItem('tr_api') ||
-       (location.protocol === 'https:' ? '' : 'http://127.0.0.1:8787'), // 公网构建默认不连本机 API（离线本地档），?api= 显式指定
+       (/^http/.test(location.origin) ? location.origin : ''), // file://(origin=null)与公网 https 默认纯本地档；LAN http 部署自动同源
   token: localStorage.getItem('tr_token') || null,
   profile: null,
   online: false,

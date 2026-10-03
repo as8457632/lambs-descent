@@ -18,7 +18,7 @@ const game = {
 function shake(n) { game.shakeAmt = Math.max(game.shakeAmt, n); }
 
 let cv, cx;
-const BUILD = 'v4.1'; // 版本号水印：确认玩家加载的是否为最新构建
+const BUILD = 'v4.2'; // 版本号水印：确认玩家加载的是否为最新构建
 window.__BUILD = BUILD;
 window.DBG_VP = () => ({ build: BUILD, inner: [innerWidth, innerHeight], vv: window.visualViewport ? [Math.round(visualViewport.width), Math.round(visualViewport.height)] : null, dpr: devicePixelRatio, css: [Math.round(cv ? cv.getBoundingClientRect().width : 0), Math.round(cv ? cv.getBoundingClientRect().height : 0)] });
 
@@ -274,7 +274,7 @@ function update() {
     else if (Input.pressed('KeyS')) { game.workshopFrom = 'title'; game.state = 'workshop'; }
     else if (mt && inZone(mt, workshopBtnZone())) { game.workshopFrom = 'title'; game.state = 'workshop'; }
     else if (mt && inZone(mt, acctBtnZone())) { game.state = 'account'; SFX.play('coin'); Touch.tapped = false; return; }
-    else if (mt && !onStageBtn && !onCharCard) newRun(game.selStage); // 点选人/选关区外才开局
+    else if (mt && !onStageBtn && !onCharCard && !inZone(mt, acctBtnZone())) newRun(game.selStage); // 点选人/选关/账号区外才开局
     else if (Touch.tapped) newRun(game.selStage);
     Touch.tapped = false;
     return;
@@ -742,14 +742,6 @@ function drawTitle() {
     cx.fillText(Touch.supported() ? '轻触屏幕 开始行动' : '按 Enter 开始行动', ROOM_W / 2, 424);
   }
   drawWorkshopBtn(cx, game);
-  { // v4.1 账号入口按钮（工坊左侧）
-    const z = acctBtnZone();
-    cx.fillStyle = 'rgba(28,22,14,.95)'; cx.beginPath(); cx.roundRect(z.x - 220, z.y, 110, 32, 6); cx.fill();
-    cx.strokeStyle = '#5a7a8a'; cx.lineWidth = 1.5; cx.beginPath(); cx.roundRect(z.x - 220, z.y, 110, 32, 6); cx.stroke();
-    cx.fillStyle = '#9cc4ee'; cx.font = 'bold 14px monospace'; cx.textAlign = 'center';
-    cx.fillText((CloudSave.token && CloudSave.online ? '☁ ' : '') + '账号', z.x - 165, z.y + 21);
-    cx.textAlign = 'left';
-  }
   cx.fillStyle = '#8a7a66'; cx.font = '12px monospace';
   cx.fillText(Touch.supported() ? '左摇杆移动 · 右摇杆射击 · 打怪升级三选一 · 赚金币进工坊' : 'WASD 移动 · 方向键射击 · Space 冲刺 · 打怪升级三选一 · 赚金币进工坊', ROOM_W / 2, 490);
   ctx.restore(); // 归还标题居中变换

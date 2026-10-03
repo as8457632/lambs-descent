@@ -18,7 +18,7 @@ const game = {
 function shake(n) { game.shakeAmt = Math.max(game.shakeAmt, n); }
 
 let cv, cx;
-const BUILD = 'v3.1'; // 版本号水印：确认玩家加载的是否为最新构建
+const BUILD = 'v4.0'; // 版本号水印：确认玩家加载的是否为最新构建
 window.__BUILD = BUILD;
 window.DBG_VP = () => ({ build: BUILD, inner: [innerWidth, innerHeight], vv: window.visualViewport ? [Math.round(visualViewport.width), Math.round(visualViewport.height)] : null, dpr: devicePixelRatio, css: [Math.round(cv ? cv.getBoundingClientRect().width : 0), Math.round(cv ? cv.getBoundingClientRect().height : 0)] });
 
@@ -33,6 +33,7 @@ function boot() {
   VIEW_W = IS_MOBILE ? CANVAS_W : ROOM_W;
   Input.init();
   Touch.init(cv);
+  CloudSave.login(); CloudSave.boot(); // v4.0 静默登录 + 30s/在线事件自动补传
   // JS 驱动画布尺寸：免疫平板桌面模式/工具栏收展导致的 vw/dvh 失准
   function fitCanvas() {
     const vv = window.visualViewport;
@@ -133,10 +134,13 @@ function boot() {
   requestAnimationFrame(frame);
 }
 
-function newRun() {
-  game.floorNum = 1;
+function newRun(stage = 1, floor = 1) { // floor>1：死亡续爬（从倒下那层重来，不重爬 3 层）
+  game.stage = stage;
+  game.floorNum = floor;
   game.kills = 0; game.roomsSeen = 0; game.runTime = 0;
-  game.theme = choice(THEMES);
+  game.theme = stageTheme(stage);
+  game.mod = zoneOf(stage).mod; // 层段规则特区修饰器（T4 生效）
+  game.statM = statMul(stage); // 怪物数值乘区（T3）
   game.player = new Player(WORLD_W / 2, WORLD_H / 2);
   game.player.char = Meta.load().char || 0;
   game.particles = []; game.toast = null;
@@ -150,11 +154,13 @@ function newRun() {
   p.coins += 3 * m.up.coin;
   p.dashCdMax = Math.max(24, p.dashCdMax - 10 * m.up.dash);
   game.reviveAvail = m.up.revive > 0;
-  game.soulsRun = 0; game.levelUps = 0; game.pendingLevelUps = 0; game.levelChoices = null;
+  game.runCoins = 0; game.runEarned = 0; game.levelUps = 0; game.pendingLevelUps = 0; game.levelChoices = null;
   Touch.sticks.move = Touch.sticks.aim = null;
   Touch.dashTap = false; Touch.tapped = false; Touch.menuTap = null; Touch.startedInPlay.clear();
-  loadFloor(1);
+  loadFloor(floor);
   game.state = 'play'; game.paused = false; game.mapOpen = false;
+  const z = zoneOf(stage);
+  game.hint = { text: isGate(stage) ? `⚑ 门槛关：怪物强化 ×1.45，Boss 获得词缀` : stage % 5 === 1 && z.rule ? `战区解锁：${z.name} —— ${z.rule}` : `第 ${stage} 关 · ${z.name} · ${game.theme.name}`, t: 260 };
   BGM.start();
 }
 
@@ -219,6 +225,7 @@ function enterRoom(room, fromDir) {
     ex -= vx * TILE * 1.35; ey -= vy * TILE * 1.35;
   }
   createRoomContents(room, game.floorNum, ex, ey);
+  modOnEnter(room); // 战区环境重掷（风向等）
   game.player.x = ex; game.player.y = ey;
   // 相机瞬移到出生点视口中心，进房不"甩镜头"
   game.cam.x = clamp(ex - VIEW_W / 2, 0, WORLD_W - VIEW_W);
@@ -245,17 +252,29 @@ function update() {
     else (el.requestFullscreen || el.webkitRequestFullscreen).call(el);
   }
   if (game.state === 'title') {
+    if (game.toast) { game.toast.t--; if (game.toast.t <= 0) game.toast = null; } // 撤离反馈要在标题可见
     const mt = Touch.menuTap; Touch.menuTap = null;
     const m = Meta.load();
-    const mh = charZoneHit(mt);
+    const unlocked = m.maxStage + 1;
+    game.selStage = clamp(game.selStage || 1, 1, unlocked);
+    const sb = stageBtnZones();
     for (let i = 0; i < CHARS.length; i++) {
-      if (Input.pressed('Digit' + (i + 1)) || (mh && inZone(mh, charZones()[i]))) { m.char = i; Meta.save(); SFX.play('coin'); Touch.tapped = false; } // 点卡=只选人，不触发"点屏开局"
+      if (Input.pressed('Digit' + (i + 1)) || (mt && inZone(charZoneHit(mt), charZones()[i]))) { m.char = i; Meta.save(); SFX.play('coin'); Touch.tapped = false; } // 点卡=只选人，不触发"点屏开局"
     }
-    if (Input.pressed('Enter')) newRun();
+    if (Input.pressed('ArrowLeft') || Input.pressed('KeyA') || (mt && inZone(mt, sb.l))) { game.selStage = Math.max(1, game.selStage - 1); SFX.play('shoot'); Touch.tapped = false; }
+    else if (Input.pressed('ArrowRight') || Input.pressed('KeyD') || (mt && inZone(mt, sb.r))) { game.selStage = Math.min(unlocked, game.selStage + 1); SFX.play('shoot'); Touch.tapped = false; }
+    const onStageBtn = mt && (inZone(mt, sb.l) || inZone(mt, sb.r));
+    const onCharCard = (() => { const h = charZoneHit(mt); return h && CHARS.some((_, i) => inZone(h, charZones()[i])); })();
+    if (mt && inZone(mt, accountZone())) {
+      const n = (typeof prompt === 'function' ? prompt('输入新昵称（≤12字）', m.nickname || '') : null);
+      if (n && n.trim()) { m.nickname = n.trim().slice(0, 12); Meta.save(); if (CloudSave.token) CloudSave.queue(); }
+      Touch.tapped = false; return;
+    }
+    if (Input.pressed('Enter')) newRun(game.selStage);
     else if (Input.pressed('KeyS')) { game.workshopFrom = 'title'; game.state = 'workshop'; }
     else if (mt && inZone(mt, workshopBtnZone())) { game.workshopFrom = 'title'; game.state = 'workshop'; }
-    else if (mt && !(mh && CHARS.some((_, i) => inZone(mh, charZones()[i])))) newRun(); // 点选人区外才开局
-    else if (Touch.tapped) newRun();
+    else if (mt && !onStageBtn && !onCharCard) newRun(game.selStage); // 点选人/选关区外才开局
+    else if (Touch.tapped) newRun(game.selStage);
     Touch.tapped = false;
     return;
   }
@@ -277,18 +296,19 @@ function update() {
     }
     for (let i = 0; i < META_UPS.length; i++) {
       const want = Input.pressed('Digit' + (i + 1)) || (mt && inZone(mt, metaRowZone(i)));
-      if (want) SFX.play(Meta.buy(META_UPS[i].id) === 'ok' ? 'coin' : 'deny');
+      if (want) { const r = Meta.buy(META_UPS[i].id); SFX.play(r === 'ok' ? 'coin' : 'deny'); if (r === 'ok') CloudSave.queue(); }
     }
     Touch.tapped = false;
     return;
   }
   if (game.state === 'dead' || game.state === 'win') {
     const mt = Touch.menuTap; Touch.menuTap = null;
-    if (Input.pressed('KeyR')) newRun();
+    const next = () => game.state === 'win' ? newRun(game.stage + 1) : newRun(game.stage, game.dieFloor || 1); // 通关进下一关 / 死亡从倒下那层续爬
+    if (Input.pressed('KeyR')) next();
     else if (Input.pressed('KeyS')) { game.workshopFrom = game.state; game.state = 'workshop'; }
     else if (Input.pressed('Escape')) game.state = 'title';
     else if (mt && inZone(mt, workshopBtnZone())) { game.workshopFrom = game.state; game.state = 'workshop'; }
-    else if (mt || Touch.tapped) newRun();
+    else if (mt || Touch.tapped) next();
     Touch.tapped = false;
     return;
   }
@@ -317,6 +337,7 @@ function update() {
   if (game.hint) { game.hint.t--; if (game.hint.t <= 0) game.hint = null; }
 
   const room = game.cur, p = game.player;
+  modWorldTick(p); // 熔岩脉冲等全局 tick
   p.update(room);
 
   // 相机跟随：死区 ±60px 防抖，lerp 平滑，钳制在世界边缘
@@ -334,7 +355,7 @@ function update() {
 
   // 配额制持续刷怪：没杀满就一直从边缘补怪；杀满后停止补刷，场上残敌必须亲手清光才开门
   if (room.quota && !room.cleared && room.killed < room.quota) {
-    if (--room.spawnT <= 0 && room.enemies.length < 13) waveSpawn(room, game.floorNum);
+    if (--room.spawnT <= 0 && room.enemies.length < Math.min(20, 13 + Math.floor((game.stage - 1) / 10))) waveSpawn(room, game.floorNum);
   }
 
   for (const e of room.enemies) if (!e.dead) e.update(room);
@@ -367,7 +388,7 @@ function update() {
   // 地洞
   if (room.trapdoor && dist2(p.x, p.y, room.trapdoor.x, room.trapdoor.y) < 26) {
     SFX.play('trapdoor');
-    game.soulsRun += 30 * game.floorNum; // 过层奖励
+    game.runCoins += 30 * game.floorNum; game.runEarned += 30 * game.floorNum; Meta.add(30 * game.floorNum); // 过层奖励实时入账
     p.heal(2);
     loadFloor(game.floorNum + 1);
   }
@@ -412,13 +433,13 @@ function handleCollisions(room) {
   // 接触伤害（出生动画期间的敌人不伤人；双向击退制造挨打感）
   for (const e of room.enemies) {
     if (!e.dead && e.spawnT <= 0 && dist2(e.x, e.y, p.x, p.y) < e.r + p.r * .75) {
-      p.hurt(e.cfg.dmg, game, e.x, e.y, e.cfg.label + (e.elite ? '·精英' : ''));
+      p.hurt(Math.ceil(e.cfg.dmg * Math.sqrt(game.statM || 1)), game, e.x, e.y, e.cfg.label + (e.elite ? '·精英' : ''));
       const d = Math.max(1, dist2(e.x, e.y, p.x, p.y));
       moveCircle(e, (e.x - p.x) / d * 20, (e.y - p.y) / d * 20, room);
     }
   }
   if (room.boss && !room.boss.dead && dist2(room.boss.x, room.boss.y, p.x, p.y) < room.boss.r * .85 + p.r * .7) {
-    p.hurt(game.floorNum >= 3 ? 3 : 2, game, room.boss.x, room.boss.y, room.boss.cfg.name); // 前期 Boss 接触伤减半心
+    p.hurt(Math.ceil((game.floorNum >= 3 ? 3 : 2) * Math.sqrt(game.statM || 1)), game, room.boss.x, room.boss.y, room.boss.cfg.name); // 前期 Boss 接触伤减半心
   }
 }
 
@@ -433,7 +454,7 @@ function onRoomCleared(room) {
   if (room.boss) {
     room.boss = null; room.hasEnemiesPlanned = false;
     game.gainXp(30 + 10 * game.floorNum);
-    game.soulsRun += 40 + 20 * game.floorNum;
+    game.runCoins += 40 + 20 * game.floorNum; game.runEarned += 40 + 20 * game.floorNum; Meta.add(40 + 20 * game.floorNum);
     const cxr = WORLD_W / 2, cyr = WORLD_H / 2;
     room.pickups.push(new Pickup('chest', cxr - 40, cyr));
     if (game.floorNum < 3) room.trapdoor = { x: cxr + 44, y: cyr };
@@ -464,25 +485,34 @@ function tryDoors(room) {
   }
 }
 
+game.retreat = function () { // 撤离：见好就收，金币已在实时入账模型中落袋
+  game.state = 'title';
+  game.selStage = clamp(game.stage, 1, Meta.load().maxStage + 1);
+  game.toast = { item: { name: '撤离成功', desc: `本局所得 ${game.runEarned || 0} 金币全额带走（死亡要损失 30%）`, color: '#7fae5a' }, t: 240 };
+  if (window.CloudSave) CloudSave.queue();
+  SFX.play('item');
+};
 game.die = function () {
   game.state = 'dead'; game.deaths++;
   game.mapOpen = false;
   game.toast = null; game.hint = null; // 结算屏不残留战斗提示文字
-  game.bankSouls();
+  game.dieFloor = game.floorNum; // 续爬锚点：只重打倒下的那层
+  const m = Meta.load(); // v4.0 数值审计：死亡损失本局所得 30%，与"撤离全保"形成真决策
+  game.diePenalty = Math.min(m.coins, Math.floor((game.runEarned || 0) * .3));
+  m.coins -= game.diePenalty; Meta.save();
+  if (window.CloudSave) CloudSave.queue();
   SFX.play('death');
 };
 game.victory = function () {
   game.state = 'win'; game.mapOpen = false;
   const m = Meta.load();
-  if (!m.cleared) { game.soulsRun += 300; m.cleared = true; } // 首通大奖
-  game.bankSouls();
+  if (game.stage > m.maxStage) m.maxStage = game.stage; // 解锁下一关
+  if (!m.cleared) { game.runCoins += 300; game.runEarned += 300; Meta.add(300); m.cleared = true; } // 首通大奖
+  if (isGate(game.stage)) { game.runCoins += 60 * game.stage; game.runEarned += 60 * game.stage; Meta.add(60 * game.stage); } // 门槛关奖励 ×3 体现
+  game.selStage = Math.min(m.maxStage + 1, game.stage + 1);
+  Meta.save();
+  if (window.CloudSave) CloudSave.queue(); // v4.0 账号云同步（离线自动队列重试）
   SFX.play('clear');
-};
-game.bankSouls = function () {
-  const m = Meta.load();
-  m.souls += game.soulsRun;
-  game.soulsBanked = game.soulsRun; game.soulsRun = 0;
-  m.save ? m.save() : Meta.save();
 };
 
 // ── 绘制 ──
@@ -515,6 +545,7 @@ function draw() {
   cx.restore();
 
   drawHUD(cx, game);
+  if (game.state === 'play') modHudTag(cx); // 战区规则徽标
   if (game.cur.boss && !game.cur.boss.dead && game.state === 'play') drawBossBar(cx, game.cur.boss);
   if (game.state === 'play' && !game.rotMode && cv.getBoundingClientRect().width < 700) { // 画面过小：自救指引 + 视口自检数据
     cx.fillStyle = 'rgba(120,20,20,.88)'; cx.fillRect(VIEW_W / 2 - 258, HUD_H + 2, 516, 36);
@@ -539,7 +570,7 @@ function draw() {
   drawVignette(cx, game);
   if (game.state === 'play') drawStragglers(cx, game); // 屏外残敌方位箭头
   if (!IS_MOBILE) drawSidePanel(cx, game);
-  else drawMobileOverlay(cx, game); // 手机：右上叠层小地图 + 魂计数
+  else drawMobileOverlay(cx, game); // 手机：右上叠层小地图 + 金币计数
   if (IS_MOBILE && !game.rotMode && innerHeight > innerWidth && game.state === 'play' && !game.mapOpen && !game.paused) { // 竖屏观感自救：引导卡
     cx.fillStyle = 'rgba(8,6,5,.78)';
     cx.beginPath(); cx.roundRect(VIEW_W / 2 - 210, CANVAS_H - 66, 420, 40, 8); cx.fill();
@@ -659,9 +690,21 @@ function drawTitle() {
   ctx.beginPath(); ctx.ellipse(ROOM_W / 2, 378, 62, 13, .06, 0, TAU); ctx.fill();
   ctx.fillStyle = 'rgba(140,190,255,.18)';
   ctx.beginPath(); ctx.ellipse(ROOM_W / 2 + 30, 384, 16, 4, 0, 0, TAU); ctx.fill();
-  // 本局主题预告（随机于开局）
-  ctx.fillStyle = '#5a6472'; ctx.font = '12px monospace'; ctx.textAlign = 'center';
-  ctx.fillText('本局行动区域随机 · 逐层深入解救人质', ROOM_W / 2, 366);
+  // v4.0 选关器：◀ 第 N 关 · 战区 · 主题 ▶（解锁到 maxStage+1）
+  const m0 = Meta.load();
+  const sel = clamp(game.selStage || 1, 1, m0.maxStage + 1);
+  const z0 = zoneOf(sel), th0 = stageTheme(sel);
+  ctx.fillStyle = 'rgba(10,7,5,.78)';
+  ctx.beginPath(); ctx.roundRect(ROOM_W / 2 - 104, 354, 208, 38, 8); ctx.fill();
+  ctx.strokeStyle = '#b08a3a'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.roundRect(ROOM_W / 2 - 104, 354, 208, 38, 8); ctx.stroke();
+  ctx.fillStyle = '#8a7a66'; ctx.font = 'bold 20px monospace'; ctx.textAlign = 'center';
+  if (sel > 1) ctx.fillText('◀', ROOM_W / 2 - 128, 379);
+  ctx.fillStyle = sel < m0.maxStage + 1 ? '#e8c85e' : 'rgba(138,122,102,.35)'; ctx.fillText('▶', ROOM_W / 2 + 128, 379); // 锁定态灰显仍占位
+  ctx.fillStyle = '#e8c85e'; ctx.font = 'bold 15px monospace';
+  ctx.fillText(`第 ${sel} 关 · ${z0.name}${isGate(sel) ? ' · 门槛' : ''}`, ROOM_W / 2, 369);
+  ctx.fillStyle = '#9cb0c8'; ctx.font = '10px monospace';
+  ctx.fillText(`${th0.name} · ${z0.rule || '解救人质，逐层深入'}`, ROOM_W / 2, 385);
   const fly = { cfg: ETYPE.fly, x: ROOM_W / 2 + Math.cos(t * .04) * 150, y: 190 + Math.sin(t * .04) * 10, r: 12, flash: 0, spawnT: 0 };
   const fly2 = { cfg: ETYPE.attackfly, x: ROOM_W / 2 + Math.cos(t * .05 + 3) * 190, y: 202 + Math.sin(t * .03) * 8, r: 11, flash: 0, spawnT: 0 };
   drawEnemy(ctx, fly, t); drawEnemy(ctx, fly2, t);
@@ -673,10 +716,29 @@ function drawTitle() {
   }
   drawWorkshopBtn(cx, game);
   cx.fillStyle = '#8a7a66'; cx.font = '12px monospace';
-  cx.fillText(Touch.supported() ? '左摇杆移动 · 右摇杆射击 · 打怪升级三选一 · 攒魂进工坊' : 'WASD 移动 · 方向键射击 · Space 冲刺 · 打怪升级三选一 · 攒魂进工坊', ROOM_W / 2, 490);
+  cx.fillText(Touch.supported() ? '左摇杆移动 · 右摇杆射击 · 打怪升级三选一 · 赚金币进工坊' : 'WASD 移动 · 方向键射击 · Space 冲刺 · 打怪升级三选一 · 赚金币进工坊', ROOM_W / 2, 490);
   ctx.restore(); // 归还标题居中变换
   cx.fillStyle = 'rgba(138,115,96,.55)'; cx.font = '10px monospace'; cx.textAlign = 'right';
-  cx.fillText(BUILD, CANVAS_W - 6, CANVAS_H - 6); cx.textAlign = 'left';
+  cx.fillText(BUILD, CANVAS_W - 6, CANVAS_H - 6);
+  // v4.0 账号状态条（右上，点击改昵称）
+  const m1 = Meta.load();
+  cx.fillStyle = 'rgba(10,7,5,.66)';
+  cx.beginPath(); cx.roundRect(CANVAS_W - 250, 2, 246, 20, 5); cx.fill();
+  cx.fillStyle = CloudSave.online ? '#7fae5a' : '#a8937c'; cx.font = '10px monospace';
+  cx.fillText(`#${CloudSave.profile ? CloudSave.profile.id : '-'} ${m1.nickname || '游客'} 金币${m1.coins} 最高${m1.maxStage}关`, CANVAS_W - 10, 15);
+  cx.textAlign = 'left';
+  if (game.toast) { // 撤离等结算反馈：标题屏顶部横幅
+    cx.globalAlpha = Math.min(1, game.toast.t / 40);
+    cx.fillStyle = 'rgba(20,14,8,.92)';
+    cx.beginPath(); cx.roundRect(CANVAS_W / 2 - 230, 40, 460, 44, 8); cx.fill();
+    cx.strokeStyle = game.toast.item.color; cx.lineWidth = 2;
+    cx.beginPath(); cx.roundRect(CANVAS_W / 2 - 230, 40, 460, 44, 8); cx.stroke();
+    cx.fillStyle = game.toast.item.color; cx.font = 'bold 15px monospace'; cx.textAlign = 'center';
+    cx.fillText(game.toast.item.name, CANVAS_W / 2, 58);
+    cx.fillStyle = '#cbb59a'; cx.font = '11px monospace';
+    cx.fillText(game.toast.item.desc, CANVAS_W / 2, 76);
+    cx.globalAlpha = 1; cx.textAlign = 'left';
+  }
 }
 
 function statLines() {
@@ -695,6 +757,7 @@ function drawDeathScreen() {
   cx.save(); cx.translate(PANEL_W / 2, 0);
   cx.fillStyle = '#c4303a'; cx.font = 'bold 58px monospace'; cx.textAlign = 'center';
   cx.fillText('行 动 失 败', ROOM_W / 2, 170);
+  cx.fillStyle = '#a8937c'; cx.font = '13px monospace'; cx.fillText(`第 ${game.stage} 关 · 倒在第 ${game.dieFloor || game.floorNum} 层 —— 损失本局所得 30%（-${game.diePenalty || 0} 金币），续爬该层`, ROOM_W / 2, 196);
   cx.fillStyle = '#8a5a4a'; cx.font = '15px monospace';
   statLines().forEach((s, i) => cx.fillText(s, ROOM_W / 2, 240 + i * 26));
   cx.fillStyle = '#c46a5a'; cx.font = '13px monospace';
@@ -706,11 +769,11 @@ function drawDeathScreen() {
     });
   }
   cx.fillStyle = '#b093e8'; cx.font = 'bold 14px monospace';
-  cx.fillText(`本局收获魂 +${game.soulsBanked || 0}（已入库）`, ROOM_W / 2, 412);
+  cx.fillText(`本局收获金币 +${game.runCoins || 0}（实时入账）`, ROOM_W / 2, 412);
   drawWorkshopBtn(cx, game);
   if (Math.floor(game.time / 30) % 2 === 0) {
     cx.fillStyle = '#e0d0b8'; cx.font = 'bold 14px monospace';
-    cx.fillText(Touch.supported() ? '点别处再来一局 · 点工坊按钮强化自己' : 'R 再来一局 · S 工坊 · Esc 回标题', ROOM_W / 2, 490);
+    cx.fillText(Touch.supported() ? '点别处重试本关 · 点工坊按钮强化自己' : 'R 重试本关 · S 工坊 · Esc 回标题', ROOM_W / 2, 490);
   }
   cx.restore();
 }
@@ -721,14 +784,15 @@ function drawWinScreen() {
   cx.save(); cx.translate(PANEL_W / 2, 0);
   cx.fillStyle = '#e8c85e'; cx.font = 'bold 46px monospace'; cx.textAlign = 'center';
   cx.fillText('人 质 解 救 成 功', ROOM_W / 2, 170);
+  cx.fillStyle = '#e8c85e'; cx.font = '13px monospace'; cx.fillText(`第 ${game.stage} 关通关！解锁第 ${game.stage + 1} 关`, ROOM_W / 2, 196);
   cx.fillStyle = '#9a8a5a'; cx.font = '15px monospace';
   statLines().forEach((s, i) => cx.fillText(s, ROOM_W / 2, 240 + i * 26));
   cx.fillStyle = '#b093e8'; cx.font = 'bold 14px monospace';
-  cx.fillText(`本局收获魂 +${game.soulsBanked || 0}（已入库）`, ROOM_W / 2, 400);
+  cx.fillText(`本局收获金币 +${game.runCoins || 0}（实时入账）`, ROOM_W / 2, 400);
   drawWorkshopBtn(cx, game);
   if (Math.floor(game.time / 30) % 2 === 0) {
     cx.fillStyle = '#e0d0b8'; cx.font = 'bold 14px monospace';
-    cx.fillText(Touch.supported() ? '点别处再战一局' : 'R 再战一局 · S 工坊 · Esc 回标题', ROOM_W / 2, 490);
+    cx.fillText(Touch.supported() ? '点别处进下一关' : 'R 下一关 · S 工坊 · Esc 回标题', ROOM_W / 2, 490);
   }
   cx.restore();
 }

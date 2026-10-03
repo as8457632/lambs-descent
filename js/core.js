@@ -89,6 +89,19 @@ const THEMES = [
   { name: '港口',   floors: ['码头', '货轮船舱', '灯塔'], hue: 205, sat: 22,
     solids: [{ art: 'box', c: '#a84a3a' }, { art: 'barrel', c: '#7a6a4a' }, { art: 'column', c: '#4a5258' }], junk: { art: 'pile', c: '#6a5a3a' } },
 ];
+// ── v4.0 爬塔战区：每 5 关一个战区 = 主题区 + 规则特区玩法；31+ 关循环 ──
+const ZONES = [
+  { name: '训练区', themes: [0, 1], mod: null, rule: '' },
+  { name: '太空区', themes: [10, 11], mod: 'bounce', rule: '低重力：冲刺中再按冲刺可二段弹跳飞天' },
+  { name: '冰宫区', themes: [2, 8], mod: 'ice', rule: '冰面惯性：移动会滑行，冲刺变长距离滑铲' },
+  { name: '熔炉区', themes: [4, 5], mod: 'lava', rule: '熔岩脉冲：地面周期性灼烧，别站桩！' },
+  { name: '幽暗区', themes: [6, 7], mod: 'dark', rule: '火把视野：光照收缩，小地图失灵' },
+  { name: '风暴区', themes: [3, 9], mod: 'wind', rule: '随机侧风：子弹与走位会被风吹偏' },
+];
+const zoneOf = stage => ZONES[Math.floor((stage - 1) / 5) % ZONES.length];
+const stageTheme = stage => { const z = zoneOf(stage); return THEMES[z.themes[(stage - 1) % z.themes.length]]; };
+const statMul = stage => Math.min(6, (1 + .16 * (stage - 1)) * (isGate(stage) ? 1.45 : 1)); // 门槛关跳变，总封顶 6.0
+const isGate = stage => stage % 5 === 0;
 function themePal(th, fn) {
   const h = th.hue + (fn - 2) * 14, s = th.sat;
   const L = l => `hsl(${h},${s}%,${l}%)`;
@@ -106,29 +119,35 @@ const CHARS = [
   { id: 'operator', name: '特工',   title: '幽灵小队 · 狙击手', hair: '#2a2a2e', style: 'cap',      suit: '#2e2e34', skin: '#c9a07e', gun: '#1e2024', gunType: 'marksman', bulk: 1 },
 ];
 
-// ── 局间元进度：魂 + 永久强化（localStorage 持久化）──
+// ── 局间元进度：单货币金币（账户余额，v4.0 起服务器同步）+ 永久强化 ──
 const Meta = {
   KEY: 'lambs_descent_meta_v1',
   data: null,
   load() {
     if (this.data) return this.data;
     try { this.data = JSON.parse(localStorage.getItem(this.KEY)); } catch (e) { this.data = null; }
-    if (!this.data || typeof this.data.souls !== 'number')
-      this.data = { souls: 0, up: { wpn: 0, hp: 0, spd: 0, coin: 0, dash: 0, revive: 0 }, cleared: false, char: 0 };
+    if (this.data && typeof this.data.souls === 'number' && typeof this.data.coins !== 'number') {
+      this.data.coins = this.data.souls; delete this.data.souls; this.save(); // 旧档"魂"迁移为金币
+    }
+    if (!this.data || typeof this.data.coins !== 'number')
+      this.data = { coins: 0, up: { wpn: 0, hp: 0, spd: 0, coin: 0, dash: 0, revive: 0 }, cleared: false, char: 0, maxStage: 0 };
     for (const k of ['wpn', 'hp', 'spd', 'coin', 'dash', 'revive']) if (!(k in this.data.up)) this.data.up[k] = 0;
     delete this.data.up.bomb; // 旧存档：炸弹槽已废弃（冲刺取代）
     if (typeof this.data.char !== 'number') this.data.char = 0;
+    if (typeof this.data.maxStage !== 'number') this.data.maxStage = 0;
     return this.data;
   },
   save() { try { localStorage.setItem(this.KEY, JSON.stringify(this.data)); } catch (e) { } },
+  add(n) { this.load().coins += n; this.save(); },          // 实时入账（拾取/击杀/通关）
+  spend(n) { const d = this.load(); if (d.coins < n) return false; d.coins -= n; this.save(); return true; },
   buy(id) {
     const def = META_UPS.find(u => u.id === id), d = this.load();
     if (!def) return 'no';
     const lv = d.up[id];
     if (lv >= def.max) return 'max';
     const cost = def.cost[lv];
-    if (d.souls < cost) return 'poor';
-    d.souls -= cost; d.up[id]++; this.save();
+    if (d.coins < cost) return 'poor';
+    d.coins -= cost; d.up[id]++; this.save();
     return 'ok';
   },
 };

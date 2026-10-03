@@ -178,7 +178,7 @@ function createRoomContents(room, floorNum, entryX, entryY) {
     const tier = clamp(floorNum - 1 + ((room.dist || 0) >= 3 ? 1 : 0), 0, 2);
     const hpMul = 0.55 + 0.12 * clamp(room.dist || 0, 0, 4);
     // 配额制：3 屏大房间怪量翻倍；初始刷一批，波次补刷，杀满配额后残敌必须全清
-    room.quota = Math.round((12 + 7 * floorNum + Math.min(12, Math.floor(game.runTime / 3600) * 2)) * (0.55 + 0.15 * clamp(room.dist || 0, 0, 4)));
+    room.quota = Math.round((12 + 7 * floorNum + Math.min(12, Math.floor(game.runTime / 3600) * 2)) * (0.55 + 0.15 * clamp(room.dist || 0, 0, 4)) * (1 + .10 * ((game.stage || 1) - 1)));
     room.killed = 0;
     room.spawnT = Math.max(50, 130 - 15 * floorNum);
     room.tier = tier; room.hpMul = hpMul;
@@ -225,6 +225,10 @@ function createRoomContents(room, floorNum, entryX, entryY) {
     const cfg = BOSSES[Math.min(floorNum, BOSSES.length) - 1];
     room.boss = new Boss(cfg, WORLD_W / 2, WORLD_H * .42, floorNum);
   }
+
+  // v4.0 撤离点：每层起点房都有（高层随时落袋），死亡则要损失本局所得 30%
+  if (room.type === 'start')
+    room.pickups.push(new Pickup('extract', WORLD_W / 2 + 300, WORLD_H / 2 + 150));
 }
 
 // 清房奖励：保底 1 金币，35% 掉武器，另掷 55% 随机补给

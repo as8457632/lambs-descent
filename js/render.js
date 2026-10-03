@@ -129,6 +129,7 @@ function drawRoom(ctx, room, pal, t) {
     ctx.beginPath(); ctx.moveTo(-20, -6); ctx.lineTo(20, -6); ctx.moveTo(-20, 6); ctx.lineTo(20, 6); ctx.stroke();
     ctx.restore();
   }
+  modRoomTint(ctx, room, pal); // 冰面/熔岩氛围
   ctx.restore();
 }
 
@@ -228,6 +229,7 @@ function drawPlayer(ctx, p, t) {
   ctx.save();
   if (p.inv > 0 && game.state === 'play') ctx.globalAlpha = Math.floor(t / 4) % 2 === 0 ? .35 : 1; // 受击半透明闪烁
   ctx.translate(p.x, p.y);
+  if (p.zing > 0) { ctx.translate(0, -p.zing * 7); ctx.scale(1 + p.zing * .16, 1 + p.zing * .16); } // 弹跳飞天腾空
   const ch = CHARS[(p.char == null ? (Meta.load().char || 0) : p.char) % CHARS.length];
   const wid = p.weapon ? p.weapon.id : 'tear';
   const effCd = Math.max(4, Math.round(WEAPONS[wid].cd * ((p.fireDelay || 13) / 13)));
@@ -340,12 +342,25 @@ function drawBossBar(ctx, b) {
   ctx.fillRect(bx, by, bw * pct, 10);
   ctx.fillStyle = '#e8c85e';
   ctx.font = '11px monospace'; ctx.textAlign = 'center';
-  ctx.fillText(b.cfg.name, VIEW_W / 2, by - 5);
+  const af = b.affix ? ({ rage: '·狂暴', barrage: '·弹幕', summon: '·增援' })[b.affix] : '';
+  ctx.fillText(b.cfg.name + af, VIEW_W / 2, by - 5);
   ctx.textAlign = 'left';
 }
 
 // ── 拾取物 ──
 function drawPickup(ctx, pk, t) {
+  if (pk.kind === 'extract') { // 撤离坪：落地脉冲圆台 + 上升箭头（不浮动，区别于拾取物）
+    const pulse = .5 + .5 * Math.sin(t * .1);
+    ctx.save(); ctx.translate(pk.x, pk.y);
+    ctx.strokeStyle = `rgba(127,174,90,${.5 + pulse * .4})`; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.ellipse(0, 6, 30, 14, 0, 0, TAU); ctx.stroke();
+    ctx.fillStyle = `rgba(127,174,90,${.14 + pulse * .1})`; ctx.fill();
+    ctx.fillStyle = '#b8e08a';
+    ctx.beginPath(); ctx.moveTo(0, -14); ctx.lineTo(9, -2); ctx.lineTo(3.5, -2); ctx.lineTo(3.5, 8); ctx.lineTo(-3.5, 8); ctx.lineTo(-3.5, -2); ctx.lineTo(-9, -2); ctx.closePath(); ctx.fill();
+    ctx.font = 'bold 10px monospace'; ctx.textAlign = 'center';
+    ctx.fillText('撤离点', 0, 30);
+    ctx.restore(); return;
+  }
   const bob = Math.sin(t * .08 + pk.x) * 2.5;
   ctx.save(); ctx.translate(pk.x, pk.y + bob);
   ctx.fillStyle = 'rgba(0,0,0,.3)';
@@ -629,9 +644,15 @@ function drawMinimapAt(ctx, g, mx, my) {
   }
 }
 
-// ── 手机叠层：右上半透明小地图（点按开全图）+ 魂计数（侧栏隐藏后的替代信息源）──
+// ── 手机叠层：右上半透明小地图（点按开全图）+ 金币计数（侧栏隐藏后的替代信息源）──
 function drawMobileOverlay(ctx, g) {
   const z = minimapZone();
+  if (g.mod === 'dark') { // 火把视野：小地图失灵
+    ctx.save(); ctx.globalAlpha = .5;
+    ctx.fillStyle = 'rgba(10,7,5,.82)'; ctx.beginPath(); ctx.roundRect(z.x - 5, z.y - 5, z.w + 10, z.h + 10, 7); ctx.fill();
+    ctx.fillStyle = '#8a7360'; ctx.font = '11px monospace'; ctx.textAlign = 'center';
+    ctx.fillText('地图失灵', z.x + z.w / 2, z.y + z.h / 2); ctx.restore(); return;
+  }
   ctx.save();
   ctx.globalAlpha = .8;
   ctx.fillStyle = 'rgba(10,7,5,.82)';
@@ -643,7 +664,7 @@ function drawMobileOverlay(ctx, g) {
   ctx.restore();
   const m = Meta.load();
   ctx.fillStyle = '#b093e8'; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'right';
-  ctx.fillText(`魂 ${m.souls}`, z.x + z.w, z.y + z.h + 14);
+  ctx.fillText(`金币 ${m.coins}`, z.x + z.w, z.y + z.h + 14);
   ctx.textAlign = 'left';
 }
 
@@ -674,7 +695,8 @@ function drawMobileStats(ctx, g) {
 function drawVignette(ctx, g) {
   const p = g.player;
   const px = p ? p.x - g.cam.x : VIEW_W / 2, py = p ? HUD_H + p.y - g.cam.y : HUD_H + ROOM_H / 2;
-  const grd = ctx.createRadialGradient(px, py, ROOM_H * .35, px, py, ROOM_W * .62);
+  const vr = modVignetteRange();
+  const grd = ctx.createRadialGradient(px, py, ROOM_H * vr[0], px, py, ROOM_W * vr[1]);
   grd.addColorStop(0, 'rgba(0,0,0,0)');
   grd.addColorStop(1, 'rgba(0,0,0,.55)');
   ctx.save();
@@ -698,6 +720,11 @@ function charZones() {
 // 标题绘制在 translate(PANEL_W/2) 内，点选命中需把画布坐标反向平移回卡片坐标系
 function charZoneHit(mt) { return mt && { x: mt.x - PANEL_W / 2, y: mt.y }; }
 function backBtnZone() { return { x: CANVAS_W / 2 - 60, y: CANVAS_H - 44, w: 120, h: 30 }; }
+function accountZone() { return { x: CANVAS_W - 250, y: 2, w: 246, h: 20 }; } // 标题屏右上账号状态条
+// 标题屏选关 ◀ ▶ 按钮（绘制在 translate(PANEL_W/2) 内，命中区换算到画布坐标，同 workshopBtnZone 规则）
+function stageBtnZones() {
+  return { l: { x: ROOM_W / 2 - 150 + PANEL_W / 2, y: 356, w: 44, h: 36 }, r: { x: ROOM_W / 2 + 106 + PANEL_W / 2, y: 356, w: 44, h: 36 } };
+}
 function metaRowZone(i) { return { x: 90, y: 128 + i * 52, w: CANVAS_W - 180, h: 46 }; }
 function levelCardZones() {
   const n = (game.levelChoices || []).length, cw = 190, gap = 26;
@@ -757,13 +784,13 @@ function drawWorkshop(ctx, g) {
   ctx.fillStyle = '#d8b878'; ctx.font = 'bold 24px monospace'; ctx.textAlign = 'center';
   ctx.fillText('锻 造 工 坊', CANVAS_W / 2, 56);
   ctx.fillStyle = '#b093e8'; ctx.font = 'bold 14px monospace';
-  ctx.fillText(`魂 : ${m.souls}${g.soulsRun ? ' (本局 +' + g.soulsRun + ')' : ''}`, CANVAS_W / 2, 84);
+  ctx.fillText(`金币 : ${m.coins}${g.runCoins ? ' (本局 +' + g.runCoins + ')' : ''}`, CANVAS_W / 2, 84);
   ctx.fillStyle = '#6b5340'; ctx.font = '11px monospace';
-  ctx.fillText('魂在死亡时自动入库 · 永久生效 · 按 1-6 或点击购买', CANVAS_W / 2, 106);
+  ctx.fillText('金币实时入账 · 升级永久生效 · 按 1-6 或点击购买', CANVAS_W / 2, 106);
   META_UPS.forEach((u, i) => {
     const z = metaRowZone(i), lv = m.up[u.id];
     const maxed = lv >= u.max, cost = maxed ? 0 : u.cost[lv];
-    const afford = !maxed && m.souls >= cost;
+    const afford = !maxed && m.coins >= cost;
     ctx.fillStyle = maxed ? 'rgba(40,32,22,.6)' : afford ? 'rgba(30,22,14,.9)' : 'rgba(18,13,9,.8)';
     ctx.beginPath(); ctx.roundRect(z.x, z.y, z.w, z.h, 6); ctx.fill();
     ctx.strokeStyle = afford ? u.c : '#3a2e24'; ctx.lineWidth = afford ? 1.8 : 1;
@@ -780,7 +807,7 @@ function drawWorkshop(ctx, g) {
     }
     ctx.textAlign = 'right'; ctx.font = 'bold 13px monospace';
     ctx.fillStyle = maxed ? '#7fae5a' : afford ? '#e8c85e' : '#8a5a4a';
-    ctx.fillText(maxed ? '已满级' : cost + ' 魂', z.x + z.w - 14, z.y + 28);
+    ctx.fillText(maxed ? '已满级' : cost + ' 金币', z.x + z.w - 14, z.y + 28);
   });
   const bz = backBtnZone();
   ctx.fillStyle = 'rgba(40,30,20,.9)';
@@ -802,7 +829,7 @@ function drawWorkshopBtn(ctx, g) {
   ctx.fillStyle = '#e8c85e'; ctx.font = 'bold 14px monospace'; ctx.textAlign = 'center';
   ctx.fillText('⚒ 锻造工坊', zx + z.w / 2 + 8, z.y + 21);
   ctx.fillStyle = '#b093e8'; ctx.font = '11px monospace'; ctx.textAlign = 'left';
-  ctx.fillText(`魂 ${m.souls}`, zx + 8, z.y + 21);
+  ctx.fillText(`金币 ${m.coins}`, zx + 8, z.y + 21);
 }
 
 function drawSidePanel(ctx, g) {
@@ -813,7 +840,8 @@ function drawSidePanel(ctx, g) {
 
   ctx.fillStyle = '#6b5340'; ctx.font = 'bold 11px monospace'; ctx.textAlign = 'left';
   ctx.fillText('地 图', x0 + 12, 82);
-  drawMinimapAt(ctx, g, x0 + 12, 92);
+  if (g.mod === 'dark') { ctx.fillStyle = '#8a7360'; ctx.font = '11px monospace'; ctx.fillText('火把视野：地图失灵', x0 + 12, 118); }
+  else drawMinimapAt(ctx, g, x0 + 12, 92);
 
   ctx.fillStyle = '#6b5340';
   ctx.fillText('属 性', x0 + 12, 238);
@@ -830,9 +858,9 @@ function drawSidePanel(ctx, g) {
   ctx.beginPath(); ctx.roundRect(x0 + 12, 247, PANEL_W - 24, 3, 1.5); ctx.fill();
   ctx.fillStyle = '#5a8ab0';
   ctx.beginPath(); ctx.roundRect(x0 + 12, 247, Math.max(3, (PANEL_W - 24) * clamp(p.xp / p.xpNext, 0, 1)), 3, 1.5); ctx.fill();
-  // 魂存量
+  // 金币存量
   ctx.fillStyle = '#b093e8'; ctx.font = '10px monospace'; ctx.textAlign = 'right';
-  ctx.fillText(`魂 ${Meta.load().souls}`, x0 + PANEL_W - 12, 82);
+  ctx.fillText(`金币 ${Meta.load().coins}`, x0 + PANEL_W - 12, 82);
   ctx.fillStyle = 'rgba(138,115,96,.5)'; ctx.font = '9px monospace';
   ctx.fillText(BUILD, x0 + PANEL_W - 6, CANVAS_H - 5); // 版本水印：截图即可判断新旧缓存
   ctx.textAlign = 'left';

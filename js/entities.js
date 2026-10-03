@@ -26,8 +26,10 @@ class Tear {
     this.bulletKey = opts.bulletKey || null; // Q 版弹种分型（缺省走 colorKey/敌我兜底）
     this.pierce = opts.pierce || 0;
     if (opts.splitT !== undefined) { this.splitT = opts.splitT; this.sp = Math.hypot(vx, vy); this.rot = opts.rot; this.eliteSplit = opts.eliteSplit; }
+    if (!isPlayer) this.dmg *= Math.min(3, Math.sqrt(game.statM || 1)); // 爬塔弹伤 sqrt 缓升并封顶×3（20关起不秒人）
   }
   update(room) {
+    modTear(this);
     if (this.homing) {
       const tgt = this.isPlayer ? nearestEnemy(room, this.x, this.y) : game.player;
       if (tgt) {
@@ -107,13 +109,18 @@ class Player {
     this.speed = 3.0; this.dmg = 3.2; this.tearSpeed = 6.6; this.tearR = 6.5;
     this.fireDelay = 13; this.tearLife = 80;
     this.hearts = 6; this.maxHearts = 6;
-    this.coins = 0;
+    // v4.0 单货币：钱包即账户余额（Meta.coins），代理保持旧代码 p.coins++ 全兼容
+    Object.defineProperty(this, 'coins', {
+      get() { return Meta.load().coins; },
+      set(v) { const d = Meta.load(); d.coins = v; Meta.save(); },
+    });
     this.dashCd = 0; this.dashCdMax = 70; this.dashing = 0; this.dashVx = 0; this.dashVy = 0;
     this.homing = false; this.shotsPerDir = 1; this.pickupMag = 24;
     this.pierce = 0; this.vamp = 0;
     this.weapon = { id: 'tear', lvl: 1 };
     this.level = 1; this.xp = 0; this.xpNext = 8; this.upLv = {};
     this.inv = 0; this.cd = 0; this.q = [];
+    this.vx = 0; this.vy = 0; this.chainT = 0; this.zing = 0; this.stillT = 0; // v4.0 特区修饰器状态
     this.aim = { x: 0, y: 1 }; this.moving = false; this.anim = 0;
     this.items = [];
   }
@@ -217,18 +224,22 @@ class Player {
       const ml = Math.hypot(mx, my);
       if (ml > 1) { mx /= ml; my /= ml; }
     }
+    const mm = modPlayerPre(this, mx, my);
+    if (mm) { mx = mm[0]; my = mm[1]; }
     this.moving = !!(mx || my);
     // 冲刺（Space / 触屏按钮）：移动方向优先，静止时朝枪口；带无敌帧，可撞开宝箱与杂物
-    if ((Input.pressed('Space') || Touch.dashTap) && this.dashCd <= 0 && this.dashing <= 0) {
+    if ((Input.pressed('Space') || Touch.dashTap) && modTryDash(this)) { Touch.dashTap = false; }
+    else if ((Input.pressed('Space') || Touch.dashTap) && this.dashCd <= 0 && this.dashing <= 0) {
       Touch.dashTap = false;
       let dx = mx, dy = my;
       if (!dx && !dy) { dx = this.aim.x; dy = this.aim.y; }
       const l = Math.hypot(dx, dy) || 1;
-      this.dashing = 13; this.dashVx = dx / l * 9.2; this.dashVy = dy / l * 9.2;
+      this.dashing = game.mod === 'ice' ? 20 : 13; this.dashVx = dx / l * 9.2; this.dashVy = dy / l * 9.2;
       this.dashCd = this.dashCdMax;
       SFX.play('dash');
       if (!game.taughtDash) { game.taughtDash = true; game.hint = { text: '冲刺无敌帧：能穿岩石杂物，撞开箱子和货柜', t: 200 }; }
     } else if (Touch.dashTap) Touch.dashTap = false;
+    modDashTick(this);
     if (this.dashing > 0) {
       this.dashing--;
       this.inv = Math.max(this.inv, 2); // 冲刺全程无敌
@@ -247,7 +258,8 @@ class Player {
       for (const o of room.props)
         if (!o.dead && dist2(o.x, o.y, this.x, this.y) < 20 + this.r) damageProp(room, o, 99);
       if (this.dashing === 0) this.inv = Math.max(this.inv, 3); // 尾帧仅 3 帧缓冲，配合 CD 防永无敌
-    } else if (this.moving) { this.anim++; moveCircle(this, mx * this.speed, my * this.speed, room); }
+    } else if (modPlayerMove(this, room)) { /* 冰面惯性滑行中 */ }
+    else if (this.moving) { this.anim++; moveCircle(this, mx * this.speed, my * this.speed, room); }
     if (this.dashCd > 0) this.dashCd--;
     // 射击（方向键优先，其次右摇杆）：按当前武器分派弹道
     let [ax, ay] = Input.dir('a');
@@ -327,13 +339,13 @@ class Enemy {
     this.cfg = ETYPE[typeId];
     this.x = x; this.y = y;
     this.elite = opts.elite !== undefined ? opts.elite
-      : Math.random() < (ELITE_CHANCE[clamp(floorNum - 1, 0, 2)] || 0) && typeId !== 'minifly';
+      : Math.random() < ((ELITE_CHANCE[clamp(floorNum - 1, 0, 2)] || 0) + (isGate(game.stage || 1) ? .12 : 0)) && typeId !== 'minifly';
     this.rScale = this.elite ? 1.35 : 1; // 精英大一号：先看见再害怕
     this.r = this.cfg.r * this.rScale;
     const es = this.elite ? 2.2 : 1;
-    this.hp = Math.ceil(this.cfg.hp * (1 + .35 * (floorNum - 1)) * es * (game.diff || 1));
+    this.hp = Math.ceil(this.cfg.hp * (1 + .35 * (floorNum - 1)) * es * (game.diff || 1) * (game.statM || 1));
     this.maxHp = this.hp;
-    this.spdMul = this.elite ? 1.12 : 1;
+    this.spdMul = (this.elite ? 1.12 : 1) * Math.min(1.6, 1 + ((game.statM || 1) - 1) * .22); // 速度只吃 22% 乘区，防后期弹不出手
     this.dead = false; this.flash = 0;
     this.spawnT = opts.instant ? 0 : 42; // 出生动画期间不移动不伤人
     this.t = randi(0, 100); this.fire = randi(50, this.cfg.fire || 100);
@@ -352,7 +364,7 @@ class Enemy {
       game.kills++;
       if (room.quota && !room.cleared && this.cfg.id !== 'minifly') room.killed++; // 分裂仔喂配额会让"真怪"提前清零，不计
       game.gainXp(Math.ceil(this.maxHp / 2));
-      game.soulsRun += 2;
+      game.runCoins += 2; game.runEarned += 2; Meta.add(2);
       if (Math.random() < .06) // 刷怪流：武器持续掉落
         room.pickups.push(new Pickup('weapon', this.x, this.y, null, 0, pickWeaponId(game.player)));
       if (game.player.vamp > 0 && Math.random() < game.player.vamp)
@@ -535,8 +547,9 @@ class Boss {
   constructor(cfg, x, y, floorNum) {
     this.cfg = cfg;
     this.x = x; this.y = y; this.r = cfg.r;
-    this.hp = Math.ceil(cfg.hp * (1 + .18 * (floorNum - 1)));
+    this.hp = Math.ceil(cfg.hp * (1 + .18 * (floorNum - 1)) * (game.statM || 1));
     this.maxHp = this.hp;
+    this.affix = isGate(game.stage || 1) ? choice(['rage', 'barrage', 'summon']) : null; // 门槛关 Boss 词缀
     this.dead = false; this.flash = 0; this.phase2 = false;
     this.act = 'idle'; this.actT = 50; this.cycleI = randi(0, cfg.cycle.length - 1);
     this.vx = 0; this.vy = 0; this.t = 0; this.volley = 0;
@@ -551,19 +564,20 @@ class Boss {
     switch (this.act) {
       case 'spit': this.actT = 22; this.volley = this.phase2 ? 2 : 1; break;
       case 'hop': // 先亮落点红圈 16 帧再跳，杜绝零预警必中
-        this.teleKind = 'hop'; this.act = 'tele'; this.actT = 16;
+        this.teleKind = 'hop'; this.act = 'tele'; this.actT = this.affix === 'rage' ? 11 : 16;
         this.hopFrom = { x: this.x, y: this.y };
         this.hopTo = { x: clamp(p.x, TILE * 2, WORLD_W - TILE * 2), y: clamp(p.y, TILE * 2, WORLD_H - TILE * 2) };
         break;
       case 'radial': this.actT = 16; break;
       case 'dash': // 先锁定方向原地蓄力预警，再真正冲锋（玩家有躲避窗口）
-        if (Math.abs(dx) > Math.abs(dy)) { this.vx = Math.sign(dx) * 8.2; this.vy = 0; }
-        else { this.vy = Math.sign(dy) * 8.2; this.vx = 0; }
-        this.teleKind = 'dash'; this.act = 'tele'; this.actT = 30;
+        const dv = this.affix === 'rage' ? 10.5 : 8.2; // 狂暴词缀：更快更长的冲锋
+        if (Math.abs(dx) > Math.abs(dy)) { this.vx = Math.sign(dx) * dv; this.vy = 0; }
+        else { this.vy = Math.sign(dy) * dv; this.vx = 0; }
+        this.teleKind = 'dash'; this.act = 'tele'; this.actT = this.affix === 'rage' ? 20 : 30;
         break;
       case 'summon': { this.actT = 30;
-        if (game.cur.enemies.length < 10) { // 随从上限，防滚雪球
-          const n = this.phase2 ? 4 : 3;
+        if (game.cur.enemies.length < (this.affix === 'summon' ? 12 : 10)) { // 随从上限，防滚雪球；增援词缀放宽
+          const n = (this.phase2 ? 4 : 3) + (this.affix === 'summon' ? 2 : 0);
           for (let i = 0; i < n; i++)
             game.cur.enemies.push(new Enemy('attackfly', this.x + rand(-60, 60), this.y + rand(-60, 60), game.floorNum));
         }
@@ -576,6 +590,7 @@ class Boss {
     this.actParam = { dx: dx / dl, dy: dy / dl, bs };
   }
   fireFan(n, spread, baseAng, speed) {
+    if (this.affix === 'barrage') n = Math.ceil(n * 1.5); // 弹幕词缀：量提升
     for (let i = 0; i < n; i++) {
       const a = baseAng + (i - (n - 1) / 2) * spread;
       game.cur.tears.push(new Tear(
@@ -659,7 +674,7 @@ class Boss {
 class Pickup {
   constructor(kind, x, y, item = null, price = 0, wid = null) {
     this.kind = kind; this.x = x; this.y = y; this.item = item; this.price = price; this.wid = wid;
-    this.r = kind === 'chest' ? 16 : 12;
+    this.r = kind === 'chest' ? 16 : kind === 'extract' ? 20 : 12;
     this.dead = false; this.taken = false; this.denyCd = 0;
   }
   // 武器拾取：换装或升级
@@ -679,7 +694,7 @@ class Pickup {
   update(room) {
     const p = game.player;
     const d = dist2(p.x, p.y, this.x, this.y);
-    if (this.kind !== 'chest' && this.kind !== 'item' && this.kind !== 'weapon' && this.price <= 0) {
+    if (this.kind !== 'chest' && this.kind !== 'extract' && this.kind !== 'item' && this.kind !== 'weapon' && this.price <= 0) {
       const mag = p.pickupMag + 6;
       if (d < mag * 2 && d > 1) {
         const pull = this.kind === 'coin' ? 2.6 : 1.6;
@@ -716,6 +731,9 @@ class Pickup {
           break;
         case 'chest':
           openChest(room, this); // 钥匙已退役：碰到即开（冲刺撞开更快）
+          break;
+        case 'extract':
+          game.retreat(); // 撤离：本局结束，金币落袋
           break;
       }
     }

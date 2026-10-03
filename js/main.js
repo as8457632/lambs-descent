@@ -18,7 +18,7 @@ const game = {
 function shake(n) { game.shakeAmt = Math.max(game.shakeAmt, n); }
 
 let cv, cx;
-const BUILD = 'v4.2'; // 版本号水印：确认玩家加载的是否为最新构建
+const BUILD = 'v4.2.1'; // 版本号水印：确认玩家加载的是否为最新构建
 window.__BUILD = BUILD;
 window.DBG_VP = () => ({ build: BUILD, inner: [innerWidth, innerHeight], vv: window.visualViewport ? [Math.round(visualViewport.width), Math.round(visualViewport.height)] : null, dpr: devicePixelRatio, css: [Math.round(cv ? cv.getBoundingClientRect().width : 0), Math.round(cv ? cv.getBoundingClientRect().height : 0)] });
 
@@ -745,6 +745,14 @@ function drawTitle() {
   cx.fillStyle = '#8a7a66'; cx.font = '12px monospace';
   cx.fillText(Touch.supported() ? '左摇杆移动 · 右摇杆射击 · 打怪升级三选一 · 赚金币进工坊' : 'WASD 移动 · 方向键射击 · Space 冲刺 · 打怪升级三选一 · 赚金币进工坊', ROOM_W / 2, 490);
   ctx.restore(); // 归还标题居中变换
+  { // 账号入口按钮：画布绝对坐标绘制，与 acctBtnZone 命中区严格一致
+    const z = acctBtnZone();
+    cx.fillStyle = 'rgba(28,22,14,.95)'; cx.beginPath(); cx.roundRect(z.x, z.y, z.w, z.h, 6); cx.fill();
+    cx.strokeStyle = '#5a7a8a'; cx.lineWidth = 1.5; cx.beginPath(); cx.roundRect(z.x, z.y, z.w, z.h, 6); cx.stroke();
+    cx.fillStyle = CloudSave.token && CloudSave.online ? '#7fae5a' : '#9cc4ee'; cx.font = 'bold 14px monospace'; cx.textAlign = 'center';
+    cx.fillText('账号', z.x + z.w / 2, z.y + 21);
+    cx.textAlign = 'left';
+  }
   cx.fillStyle = 'rgba(138,115,96,.55)'; cx.font = '10px monospace'; cx.textAlign = 'right';
   cx.fillText(BUILD, CANVAS_W - 6, CANVAS_H - 6);
   // v4.0 账号状态条（右上，点击改昵称）

@@ -18,7 +18,7 @@ const game = {
 function shake(n) { game.shakeAmt = Math.max(game.shakeAmt, n); }
 
 let cv, cx;
-const BUILD = 'v4.0'; // 版本号水印：确认玩家加载的是否为最新构建
+const BUILD = 'v4.1'; // 版本号水印：确认玩家加载的是否为最新构建
 window.__BUILD = BUILD;
 window.DBG_VP = () => ({ build: BUILD, inner: [innerWidth, innerHeight], vv: window.visualViewport ? [Math.round(visualViewport.width), Math.round(visualViewport.height)] : null, dpr: devicePixelRatio, css: [Math.round(cv ? cv.getBoundingClientRect().width : 0), Math.round(cv ? cv.getBoundingClientRect().height : 0)] });
 
@@ -273,9 +273,34 @@ function update() {
     if (Input.pressed('Enter')) newRun(game.selStage);
     else if (Input.pressed('KeyS')) { game.workshopFrom = 'title'; game.state = 'workshop'; }
     else if (mt && inZone(mt, workshopBtnZone())) { game.workshopFrom = 'title'; game.state = 'workshop'; }
+    else if (mt && inZone(mt, acctBtnZone())) { game.state = 'account'; SFX.play('coin'); Touch.tapped = false; return; }
     else if (mt && !onStageBtn && !onCharCard) newRun(game.selStage); // 点选人/选关区外才开局
     else if (Touch.tapped) newRun(game.selStage);
     Touch.tapped = false;
+    return;
+  }
+  if (game.state === 'account') {
+    const mt = Touch.menuTap; Touch.menuTap = null;
+    if (Input.pressed('Escape') || !window.prompt) { if (Input.pressed('Escape')) { game.state = 'title'; Touch.tapped = false; return; } }
+    if (mt || Touch.tapped) {
+      const hit = mt || Touch.menuTap; Touch.tapped = false;
+      const rows = acctRowsZones();
+      const pick = hit ? rows.find(r => inZone(hit, r)) : null;
+      const key = pick ? pick.id : 'back';
+      if (key === 'back' || key === 'status') game.state = 'title';
+      else if (key === 'nick') {
+        const n = prompt('输入昵称（≤12 字）', Meta.load().nickname || '');
+        if (n && n.trim()) { Meta.load().nickname = n.trim().slice(0, 12); Meta.save(); CloudSave.queue(); SFX.play('coin'); }
+      } else if (key === 'server') {
+        const u = prompt('账号服务器地址（留空=纯本地存档）', CloudSave.api || '');
+        if (u !== null) { CloudSave.api = u.trim(); localStorage.setItem('tr_api', u.trim()); CloudSave.login().then(ok => { game.toast = { item: { name: ok ? '登录成功' : '连不上，本地继续玩', desc: ok ? `账号 #${CloudSave.profile.id} 已绑定` : '已保留本地存档', color: ok ? '#7fae5a' : '#c9a24a' }, t: 200 }; if (ok) CloudSave.queue(); }); }
+      } else if (key === 'export') {
+        prompt('复制存档码（换设备时在新设备导入）：', btoa(unescape(encodeURIComponent(JSON.stringify(Meta.load())))));
+      } else if (key === 'import') {
+        const c = prompt('粘贴存档码：', '');
+        try { const d = JSON.parse(decodeURIComponent(escape(atob(c.trim())))); if (d && typeof d.coins === 'number') { Meta.data = d; Meta.save(); location.reload(); } else alert('存档码无效'); } catch (e) { alert('存档码无效'); }
+      }
+    }
     return;
   }
   if (game.state === 'levelup') {
@@ -308,7 +333,7 @@ function update() {
     else if (Input.pressed('KeyS')) { game.workshopFrom = game.state; game.state = 'workshop'; }
     else if (Input.pressed('Escape')) game.state = 'title';
     else if (mt && inZone(mt, workshopBtnZone())) { game.workshopFrom = game.state; game.state = 'workshop'; }
-    else if (mt || Touch.tapped) next();
+    else if ((mt && inZone(mt, bigNextZone())) || mt || Touch.tapped) next();
     Touch.tapped = false;
     return;
   }
@@ -355,7 +380,8 @@ function update() {
 
   // 配额制持续刷怪：没杀满就一直从边缘补怪；杀满后停止补刷，场上残敌必须亲手清光才开门
   if (room.quota && !room.cleared && room.killed < room.quota) {
-    if (--room.spawnT <= 0 && room.enemies.length < Math.min(20, 13 + Math.floor((game.stage - 1) / 10))) waveSpawn(room, game.floorNum);
+    const aliveCap = Math.min(60, (IS_MOBILE ? 30 : 40) + Math.floor((game.stage - 1) / 10) * 2);
+    if (--room.spawnT <= 0 && room.enemies.length < aliveCap) waveSpawn(room, game.floorNum);
   }
 
   for (const e of room.enemies) if (!e.dead) e.update(room);
@@ -522,6 +548,7 @@ function draw() {
 
   if (game.state === 'title') { drawTitle(); return; }
   if (game.state === 'workshop') { drawWorkshop(cx, game); return; }
+  if (game.state === 'account') { drawAccountPanel(cx, game); return; } // 面板态短路，不走战场渲染
 
   const pal = themePal(game.theme || THEMES[0], game.floorNum);
   cx.save();
@@ -715,6 +742,14 @@ function drawTitle() {
     cx.fillText(Touch.supported() ? '轻触屏幕 开始行动' : '按 Enter 开始行动', ROOM_W / 2, 424);
   }
   drawWorkshopBtn(cx, game);
+  { // v4.1 账号入口按钮（工坊左侧）
+    const z = acctBtnZone();
+    cx.fillStyle = 'rgba(28,22,14,.95)'; cx.beginPath(); cx.roundRect(z.x - 220, z.y, 110, 32, 6); cx.fill();
+    cx.strokeStyle = '#5a7a8a'; cx.lineWidth = 1.5; cx.beginPath(); cx.roundRect(z.x - 220, z.y, 110, 32, 6); cx.stroke();
+    cx.fillStyle = '#9cc4ee'; cx.font = 'bold 14px monospace'; cx.textAlign = 'center';
+    cx.fillText((CloudSave.token && CloudSave.online ? '☁ ' : '') + '账号', z.x - 165, z.y + 21);
+    cx.textAlign = 'left';
+  }
   cx.fillStyle = '#8a7a66'; cx.font = '12px monospace';
   cx.fillText(Touch.supported() ? '左摇杆移动 · 右摇杆射击 · 打怪升级三选一 · 赚金币进工坊' : 'WASD 移动 · 方向键射击 · Space 冲刺 · 打怪升级三选一 · 赚金币进工坊', ROOM_W / 2, 490);
   ctx.restore(); // 归还标题居中变换
@@ -739,6 +774,35 @@ function drawTitle() {
     cx.fillText(game.toast.item.desc, CANVAS_W / 2, 76);
     cx.globalAlpha = 1; cx.textAlign = 'left';
   }
+}
+
+function drawAccountPanel(cx, g) {
+  cx.fillStyle = '#0a0806'; cx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+  cx.fillStyle = '#e8c85e'; cx.font = 'bold 24px monospace'; cx.textAlign = 'center';
+  cx.fillText('账 号', CANVAS_W / 2, 90);
+  const rows = acctRowsZones();
+  const m = Meta.load();
+  const labels = [
+    ['status', CloudSave.token ? (CloudSave.online ? `已登录：账号 #${CloudSave.profile && CloudSave.profile.id} · 云同步✓` : '已登录 · 当前离线（本地暂存，恢复后自动补传）') : '未登录 —— 点这里登录（连不上则本地存档照常玩）'],
+    ['nick', `昵称：${m.nickname || '（未设置，点这里填写）'}`],
+    ['server', `服务器：${CloudSave.api || '（未设置 = 纯本地存档，点这里填写）'}`],
+    ['export', '导出存档码（复制给新设备）'],
+    ['import', '导入存档码（粘贴后自动重载）'],
+    ['back', '返 回'],
+  ];
+  rows.forEach((r, i) => {
+    const [id, text] = labels[i];
+    cx.fillStyle = id === 'back' ? 'rgba(60,44,26,.6)' : 'rgba(24,18,12,.9)';
+    cx.beginPath(); cx.roundRect(r.x, r.y, r.w, r.h, 8); cx.fill();
+    cx.strokeStyle = id === 'status' && CloudSave.online ? '#7fae5a' : '#4a382a'; cx.lineWidth = 1.5;
+    cx.beginPath(); cx.roundRect(r.x, r.y, r.w, r.h, 8); cx.stroke();
+    cx.fillStyle = id === 'status' ? (CloudSave.token ? '#b8d8a8' : '#e0d0b8') : '#cbb59a';
+    cx.font = '13px monospace'; cx.textAlign = 'center';
+    cx.fillText(text.slice(0, 44), r.x + r.w / 2, r.y + 27);
+  });
+  cx.fillStyle = '#5a4c42'; cx.font = '10px monospace';
+  cx.fillText('微信/抖音小游戏登录通道已预留（platform.js），当前为游客+服务器账号', CANVAS_W / 2, CANVAS_H - 18);
+  cx.textAlign = 'left';
 }
 
 function statLines() {
@@ -773,7 +837,12 @@ function drawDeathScreen() {
   drawWorkshopBtn(cx, game);
   if (Math.floor(game.time / 30) % 2 === 0) {
     cx.fillStyle = '#e0d0b8'; cx.font = 'bold 14px monospace';
-    cx.fillText(Touch.supported() ? '点别处重试本关 · 点工坊按钮强化自己' : 'R 重试本关 · S 工坊 · Esc 回标题', ROOM_W / 2, 490);
+    { const z = bigNextZone();
+      cx.fillStyle = 'rgba(120,40,30,.9)'; cx.beginPath(); cx.roundRect(z.x, z.y, z.w, z.h, 8); cx.fill();
+      cx.strokeStyle = '#e8c85e'; cx.lineWidth = 2; cx.beginPath(); cx.roundRect(z.x, z.y, z.w, z.h, 8); cx.stroke();
+      cx.fillStyle = '#ffe0c0'; cx.font = 'bold 17px monospace'; cx.textAlign = 'center';
+      cx.fillText(`⟳ 重试第 ${game.stage} 关 · 第 ${game.dieFloor || ''} 层`, z.x + z.w / 2, z.y + 28); cx.textAlign = 'left'; }
+    cx.fillText(Touch.supported() ? '点按钮重试本关 · 点工坊按钮强化自己' : 'R 重试本关 · S 工坊 · Esc 回标题', ROOM_W / 2, 490);
   }
   cx.restore();
 }
@@ -792,7 +861,12 @@ function drawWinScreen() {
   drawWorkshopBtn(cx, game);
   if (Math.floor(game.time / 30) % 2 === 0) {
     cx.fillStyle = '#e0d0b8'; cx.font = 'bold 14px monospace';
-    cx.fillText(Touch.supported() ? '点别处进下一关' : 'R 下一关 · S 工坊 · Esc 回标题', ROOM_W / 2, 490);
+    { const z = bigNextZone();
+      cx.fillStyle = 'rgba(40,80,45,.92)'; cx.beginPath(); cx.roundRect(z.x, z.y, z.w, z.h, 8); cx.fill();
+      cx.strokeStyle = '#e8c85e'; cx.lineWidth = 2; cx.beginPath(); cx.roundRect(z.x, z.y, z.w, z.h, 8); cx.stroke();
+      cx.fillStyle = '#f0e2c0'; cx.font = 'bold 18px monospace'; cx.textAlign = 'center';
+      cx.fillText(`▶ 进入第 ${game.stage + 1} 关`, z.x + z.w / 2, z.y + 29); cx.textAlign = 'left'; }
+    cx.fillText(Touch.supported() ? '点按钮进下一关 · 点工坊强化' : 'R 下一关 · S 工坊 · Esc 回标题', ROOM_W / 2, 490);
   }
   cx.restore();
 }

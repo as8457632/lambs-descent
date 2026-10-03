@@ -178,11 +178,11 @@ function createRoomContents(room, floorNum, entryX, entryY) {
     const tier = clamp(floorNum - 1 + ((room.dist || 0) >= 3 ? 1 : 0), 0, 2);
     const hpMul = 0.55 + 0.12 * clamp(room.dist || 0, 0, 4);
     // 配额制：3 屏大房间怪量翻倍；初始刷一批，波次补刷，杀满配额后残敌必须全清
-    room.quota = Math.round((12 + 7 * floorNum + Math.min(12, Math.floor(game.runTime / 3600) * 2)) * (0.55 + 0.15 * clamp(room.dist || 0, 0, 4)) * (1 + .10 * ((game.stage || 1) - 1)));
+    room.quota = Math.round((12 + 7 * floorNum + Math.min(12, Math.floor(game.runTime / 3600) * 2)) * (0.55 + 0.15 * clamp(room.dist || 0, 0, 4)) * (1 + .10 * ((game.stage || 1) - 1)) * 10); // 用户实测反馈：怪量提 10 倍才够打
     room.killed = 0;
     room.spawnT = Math.max(50, 130 - 15 * floorNum);
     room.tier = tier; room.hpMul = hpMul;
-    const initial = Math.min(room.quota, 4 + 2 * floorNum + randi(0, 3));
+    const initial = Math.min(room.quota, (4 + 2 * floorNum + randi(0, 3)) * 5);
     for (let i = 0; i < initial; i++) {
       let x, y, tries = 0;
       do {
@@ -251,7 +251,7 @@ function waveSpawn(room, floorNum) {
     ['attackfly', 'gaper', 'pooter', 'bone', 'eye', 'bat', 'hopper', 'mushroom'],
     ['attackfly', 'gaper', 'splitter', 'bone', 'eye', 'ghost', 'turret', 'bat', 'spreader'],
   ];
-  const n = randi(2, 3);
+  const n = randi(4, 6);
   for (let i = 0; i < n; i++) {
     let x, y, tries = 0;
     do {
@@ -267,5 +267,5 @@ function waveSpawn(room, floorNum) {
     if (room.hpMul) e.hp = e.maxHp = Math.max(2, Math.ceil(e.hp * room.hpMul));
     room.enemies.push(e);
   }
-  room.spawnT = Math.max(46, 140 - 16 * floorNum - Math.floor(game.runTime / 3600) * 12); // 间隔随层数/分钟收紧
+  room.spawnT = Math.max(24, 90 - 10 * floorNum - Math.floor(game.runTime / 3600) * 8); // 间隔随层数/分钟收紧
 }

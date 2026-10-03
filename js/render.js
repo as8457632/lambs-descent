@@ -721,6 +721,13 @@ function charZones() {
 function charZoneHit(mt) { return mt && { x: mt.x - PANEL_W / 2, y: mt.y }; }
 function backBtnZone() { return { x: CANVAS_W / 2 - 60, y: CANVAS_H - 44, w: 120, h: 30 }; }
 function accountZone() { return { x: CANVAS_W - 250, y: 2, w: 246, h: 20 }; } // 标题屏右上账号状态条
+function acctBtnZone() { return { x: CANVAS_W / 2 - 96 + PANEL_W / 2 - 220, y: 444, w: 110, h: 32 }; } // 标题"账号"按钮（工坊左侧，与绘制矩形一致）
+function bigNextZone() { return { x: CANVAS_W / 2 - 110, y: 430, w: 220, h: 44 }; } // 结算屏大按钮
+function acctRowsZones() { // 账号面板 5 行 + 返回
+  const rows = ['status', 'nick', 'server', 'export', 'import', 'back'].map((id, i) =>
+    ({ id, x: CANVAS_W / 2 - 190, y: 150 + i * 52, w: 380, h: 44 }));
+  return rows;
+}
 // 标题屏选关 ◀ ▶ 按钮（绘制在 translate(PANEL_W/2) 内，命中区换算到画布坐标，同 workshopBtnZone 规则）
 function stageBtnZones() {
   return { l: { x: ROOM_W / 2 - 150 + PANEL_W / 2, y: 356, w: 44, h: 36 }, r: { x: ROOM_W / 2 + 106 + PANEL_W / 2, y: 356, w: 44, h: 36 } };

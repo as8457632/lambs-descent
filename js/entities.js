@@ -26,10 +26,23 @@ class Tear {
     this.bulletKey = opts.bulletKey || null; // Q 版弹种分型（缺省走 colorKey/敌我兜底）
     this.pierce = opts.pierce || 0;
     if (opts.splitT !== undefined) { this.splitT = opts.splitT; this.sp = Math.hypot(vx, vy); this.rot = opts.rot; this.eliteSplit = opts.eliteSplit; }
+    // v4.3 十新枪行为参数
+    this.squash = 0; this.spId = opts.spId || null;
+    this.passthrough = !!opts.passthrough;         // 漩涡核：飞行段不与任何实体碰撞
+    if (opts.boomer) { this.boomer = true; this.boomerT = 44; this.phase = 'out'; }
+    if (opts.fuseT !== undefined) { this.fuseT = opts.fuseT; this.fuse0 = opts.fuseT || 1; this.fuse = 1; this.landed = false; }
+    if (opts.blast !== undefined) this.blast = opts.blast;   // 爆炸半径（plop 时引爆）
+    this.bounces = opts.bounces;                              // 橡皮鸭：剩余撞墙反弹次数（undefined=不复弹）
+    this.convert = opts.convert || null;                      // 'pin' | 'vortex'：死亡转为场地危险实体
+    if (this.convert) { this.pinR = opts.pinR; this.vR = opts.vR; }
+    this.deathBurst = opts.deathBurst || null;                // 死亡绽出小子弹（千瓣菊/工蜂箱）
     if (!isPlayer) this.dmg *= Math.min(3, Math.sqrt(game.statM || 1)); // 爬塔弹伤 sqrt 缓升并封顶×3（20关起不秒人）
   }
   update(room) {
     modTear(this);
+    if (this.squash > 0) this.squash = Math.max(0, this.squash - .12);
+    if (this.boomer) { this.updateBoomer(room); return; }
+    if (this.fuseT !== undefined) { this.updateFuse(room); return; }
     if (this.homing) {
       const tgt = this.isPlayer ? nearestEnemy(room, this.x, this.y) : game.player;
       if (tgt) {
@@ -57,15 +70,131 @@ class Tear {
       SFX.play('enemyShoot');
       return;
     }
-    if (--this.life <= 0) { this.plop(room); return; }
-    if (hitWall(room, this.x, this.vy ? this.y + Math.sign(this.vy) * this.r : this.y, this.r * .6) ||
-        hitWall(room, this.vx ? this.x + Math.sign(this.vx) * this.r : this.x, this.y, this.r * .6)) {
-      this.plop(room);
+    if (--this.life <= 0) { this.plop(room, 'life'); return; }
+    // 探墙拆两轴：橡皮鸭可分别翻 vx/vy 复弹，其余弹种照旧消亡
+    const wy = hitWall(room, this.x, this.vy ? this.y + Math.sign(this.vy) * this.r : this.y, this.r * .6);
+    const wx = hitWall(room, this.vx ? this.x + Math.sign(this.vx) * this.r : this.x, this.y, this.r * .6);
+    if (wy || wx) {
+      if (this.bounces !== undefined && this.bounces > 0) {
+        if (wy) { this.vy = -this.vy; this.y += this.vy * 2; }
+        if (wx) { this.vx = -this.vx; this.x += this.vx * 2; }
+        this.bounces--; this.squash = 1;
+        game.fx.push({ type: 'bounce', x: this.x, y: this.y, r: this.r + 3, dir: Math.atan2(-this.vy, -this.vx), t: 10, t0: 10 });
+      } else this.plop(room, 'wall');
     }
   }
-  plop(room) {
+  updateBoomer(room) { // 骨镰回旋镖：去程直线，到点/撞墙折返，回程自导追玩家（清 hits 可再砍一刀）
+    if (--this.life <= 0) { this.dead = true; return; }
+    if (this.phase === 'out') {
+      this.x += this.vx; this.y += this.vy; this.boomerT--;
+      if (this.boomerT <= 0 || hitWall(room, this.x + this.vx, this.y + this.vy, this.r * .5)) {
+        this.phase = 'back'; this.hits = [];
+      }
+      return;
+    }
+    const p = game.player;
+    if (!p) { this.dead = true; return; }
+    const a = Math.atan2(p.y - this.y, p.x - this.x), sp = Math.hypot(this.vx, this.vy) || 5;
+    this.vx = Math.cos(a) * sp; this.vy = Math.sin(a) * sp;
+    this.x += this.vx; this.y += this.vy;
+    if (dist2(this.x, this.y, p.x, p.y) < p.r + this.r + 6) { this.dead = true; SFX.play('item'); }
+  }
+  updateFuse(room) { // 罐罐雷：飞到落点或撞墙即着陆停转，引信烧尽由 plop 统一引爆
+    this.fuseT--;
+    this.fuse = clamp(this.fuseT / this.fuse0, 0, 1);
+    if (this.fuseT <= 0) { this.plop(room, 'fuse'); return; }
+    if (!this.landed) {
+      const nx = this.x + this.vx, ny = this.y + this.vy;
+      if (hitWall(room, nx, ny, this.r * .5)) { this.landed = true; this.vx = this.vy = 0; this.squash = 1; }
+      else { this.x = nx; this.y = ny; }
+    }
+  }
+  plop(room, cause) {
     this.dead = true;
+    if (this.blast !== undefined) { // 贴身接触即炸：定点雷特性
+      damageArea(room, this.x, this.y, this.blast, this.dmg);
+      game.fx.push({ type: 'blast', x: this.x, y: this.y, r: this.blast, seed: randi(0, 9), t: 18, t0: 18 });
+      addScorch(room, this.x, this.y, this.blast * .8);
+      SFX.play('boom');
+    }
+    if (this.convert) convertTear(room, this);
+    if (this.deathBurst) burstTear(room, this);
     spawnParticles(room, this.x, this.y, 3, this.isPlayer ? '#9cc4ee' : '#c96a4a', 1.4);
+  }
+}
+
+// 弹体死亡转化：刺猬钉→落地钉（超 8 根最旧先亡）/ 漩涡核→坍缩场（同屏 2 个）
+function convertTear(room, tr) {
+  if (tr.convert === 'pin') {
+    while (room.pins.length >= 8) room.pins.shift();
+    room.pins.push({ x: tr.x, y: tr.y, life: 360, r: tr.pinR || 26, dmg: tr.dmg * .35, cap: WEAPONS.pin.c, angle: rand(-1.5, -.7), l5: !!(game.player && game.player.weapon.id === 'pin' && game.player.weapon.lvl >= 5) });
+  } else if (tr.convert === 'vortex') {
+    while (room.vortexes.length >= 2) room.vortexes.shift();
+    room.vortexes.push({ x: tr.x, y: tr.y, life: 300, r: tr.vR || 56, tickDmg: tr.dmg * .45, burstDmg: tr.dmg * 2.2 });
+  }
+}
+// 死亡绽片：千瓣菊花瓣 / 工蜂箱小蜂（均为玩家友弹）
+function burstTear(room, tr) {
+  const b = tr.deathBurst;
+  game.fx.push({ type: b.fx, x: tr.x, y: tr.y, r: tr.r + 6, seed: randi(0, 9), n: b.n, t: 14, t0: 14 });
+  for (let i = 0; i < b.n; i++) {
+    const a = i * TAU / b.n + rand(-(b.jit || .3), b.jit || .3), sp = b.sp * rand(.75, 1.15);
+    room.tears.push(new Tear(tr.x, tr.y, Math.cos(a) * sp, Math.sin(a) * sp, tr.dmg * b.dmgMul, 5.5, true,
+      { life: b.life, bulletKey: b.key, homing: b.homing || false }));
+  }
+}
+
+// 瞬发 AoE 直伤（罐罐雷/漩涡/荆棘鞭/穿云枪共用），绕开弹体碰撞管线
+function damageArea(room, x, y, r, dmg) {
+  for (const e of room.enemies) {
+    if (e.dead || e.spawnT > 0) continue;
+    if (dist2(x, y, e.x, e.y) < r + e.r * .6) e.hit(dmg, room, e.x, e.y);
+  }
+  const b = room.boss;
+  if (b && !b.dead && dist2(x, y, b.x, b.y) < r + b.r * .5) b.hit(dmg);
+}
+function hasLos(room, x1, y1, x2, y2) {
+  const d = Math.hypot(x2 - x1, y2 - y1), n = Math.max(1, Math.ceil(d / 16));
+  for (let i = 1; i < n; i++) {
+    const x = x1 + (x2 - x1) * i / n, y = y1 + (y2 - y1) * i / n;
+    if (room.solidTile(Math.floor(x / TILE), Math.floor(y / TILE))) return false;
+  }
+  return true;
+}
+function addScorch(room, x, y, r) {
+  room.scorch.push({ x, y, r, a: rand(0, TAU), al: rand(.24, .38) });
+  if (room.scorch.length > 12) room.scorch.shift();
+}
+
+// 场地危险实体逐帧：钉子周期扎刺 / 漩涡吸聚+跳伤+到期塌缩
+function updateHazards(room) {
+  for (let i = room.pins.length - 1; i >= 0; i--) {
+    const pin = room.pins[i];
+    pin.life--;
+    if (pin.life <= 0) { room.pins.splice(i, 1); continue; }
+    if (pin.life % 45 === 0) damageArea(room, pin.x, pin.y, pin.r, pin.dmg);
+  }
+  for (let i = room.vortexes.length - 1; i >= 0; i--) {
+    const v = room.vortexes[i];
+    v.life--;
+    const pull = v.life > 30 ? 1.6 : 1.6 * v.life / 30; // 末期吸力渐衰给敌人挣脱窗口
+    for (const e of room.enemies) {
+      if (e.dead || e.spawnT > 0) continue;
+      const d = Math.max(1, dist2(v.x, v.y, e.x, e.y));
+      if (d < v.r + e.r) moveCircle(e, (v.x - e.x) / d * pull, (v.y - e.y) / d * pull, room);
+    }
+    const b = room.boss;
+    if (b && !b.dead && b.act === 'idle') { // Boss 只在闲逛相位吃 25% 吸力，冲锋/瞬移不被拉扯
+      const d = Math.max(1, dist2(v.x, v.y, b.x, b.y));
+      if (d < v.r + b.r) moveCircle(b, (v.x - b.x) / d * pull * .25, (v.y - b.y) / d * pull * .25, room);
+    }
+    if (v.life % 30 === 0) damageArea(room, v.x, v.y, v.r * .5, v.tickDmg);
+    if (v.life <= 0) {
+      damageArea(room, v.x, v.y, v.r, v.burstDmg);
+      game.fx.push({ type: 'implode', x: v.x, y: v.y, r: v.r, t: 16, t0: 16 });
+      SFX.play('zap');
+      room.vortexes.splice(i, 1);
+    }
   }
 }
 
@@ -169,14 +298,7 @@ class Player {
     const maxChain = 2 + Math.min(3, lvl);
     const pts = [{ x: this.x + ux * 14, y: this.y + uy * 14 }];
     const hit = [];
-    const los = (x1, y1, x2, y2) => {
-      const d = Math.hypot(x2 - x1, y2 - y1), n = Math.max(1, Math.ceil(d / 16));
-      for (let i = 1; i < n; i++) {
-        const x = x1 + (x2 - x1) * i / n, y = y1 + (y2 - y1) * i / n;
-        if (room.solidTile(Math.floor(x / TILE), Math.floor(y / TILE))) return false;
-      }
-      return true;
-    };
+    const los = (x1, y1, x2, y2) => hasLos(room, x1, y1, x2, y2);
     for (let c = 0; c < maxChain; c++) {
       let best = null, bd = c === 0 ? 280 * (this.tearLife / 80) : 170;
       for (const e of room.enemies) {
@@ -203,6 +325,48 @@ class Player {
         { life: Math.round(30 * (this.tearLife / 80)), colorKey: 'spark', pierce: 1 }));
       SFX.play('zap');
     }
+  }
+  // 荆棘鞭：无弹体近战扇形，瞬发结算 + 14 帧鞭影 fx
+  fireWhip(room, ux, uy, lvl) {
+    const base = Math.atan2(uy, ux), range = 78 + 8 * lvl, spread = 1.5;
+    const dmg = weaponDmg(this, WEAPONS.whip);
+    let hitAny = false;
+    const foes = room.enemies.filter(e => !e.dead && e.spawnT <= 0);
+    if (room.boss && !room.boss.dead) foes.push(room.boss);
+    for (const e of foes) {
+      const d = Math.max(1, dist2(this.x, this.y, e.x, e.y));
+      if (d > range + e.r * .6) continue;
+      let da = Math.atan2(e.y - this.y, e.x - this.x) - base;
+      while (da > Math.PI) da -= TAU; while (da < -Math.PI) da += TAU;
+      if (Math.abs(da) > spread / 2 || !hasLos(room, this.x, this.y, e.x, e.y)) continue;
+      if (e.cfg) e.hit(dmg, room, e.x, e.y); else e.hit(dmg);
+      hitAny = true;
+    }
+    game.fx.push({ type: 'whip', x: this.x, y: this.y, ang: base, spread, r: range, hit: hitAny, t: 14, t0: 14 });
+    SFX.play(hitAny ? 'hit' : 'dash');
+  }
+  // 穿云枪：cd 就绪即蓄满，开火=全图宽瞬发贯穿线，伤害随距离衰减至 40% 下限
+  fireRail(room, ux, uy, lvl) {
+    const dmg0 = weaponDmg(this, WEAPONS.rail);
+    let ex = this.x, ey = this.y;
+    const pts = [];
+    for (let d = 18; d < WORLD_W; d += 7) {
+      const px = this.x + ux * d, py = this.y + uy * d;
+      if (room.solidTile(Math.floor(px / TILE), Math.floor(py / TILE))) break;
+      ex = px; ey = py; pts.push([px, py, d]);
+    }
+    const hitR = 12 + lvl * 1.5, hit = [];
+    for (const [px, py, d] of pts) {
+      const dmg = dmg0 * Math.max(.5, 1 - d / 1200);
+      for (const e of room.enemies) {
+        if (e.dead || e.spawnT > 0 || hit.includes(e)) continue;
+        if (dist2(px, py, e.x, e.y) < hitR + e.r * .6) { hit.push(e); e.hit(dmg, room, e.x, e.y); }
+      }
+      const b = room.boss;
+      if (b && !b.dead && !hit.includes(b) && dist2(px, py, b.x, b.y) < hitR + b.r * .5) { hit.push(b); b.hit(dmg); }
+    }
+    game.fx.push({ type: 'rail', x1: this.x + ux * 16, y1: this.y + uy * 16, x2: ex, y2: ey, lvl, t: 13, t0: 13 });
+    SFX.play('laser');
   }
   heal(n) { this.hearts = clamp(this.hearts + n, 0, this.maxHearts); }
   update(room) {
@@ -292,22 +456,70 @@ class Player {
           this.fireLaser(room, ux, uy, lvl);
         } else if (w.id === 'light') {
           this.fireChain(room, ux, uy, lvl);
+        } else if (w.id === 'sickle') {
+          room.tears.push(new Tear(this.x + ux * 14, this.y + uy * 14,
+            ux * this.tearSpeed * 1.05, uy * this.tearSpeed * 1.05, weaponDmg(this, w), 9 + lvl * .5, true,
+            { life: 150, bulletKey: 'sickle', boomer: true, spId: 'sickle', pierce: 999 })); // 高穿透：命中不消亡，折返清 hits 后再砍
+          SFX.play('shoot');
+        } else if (w.id === 'mortar') {
+          room.tears.push(new Tear(this.x + ux * 12, this.y + uy * 12,
+            ux * 5.4, uy * 5.4, weaponDmg(this, w), 11, true,
+            { life: 200, bulletKey: 'grenade', spId: 'mortar', fuseT: 34 + lvl * 2, blast: 60 + lvl * 6 }));
+          SFX.play('shoot');
+        } else if (w.id === 'whip') {
+          this.fireWhip(room, ux, uy, lvl);
+        } else if (w.id === 'chrys') {
+          room.tears.push(new Tear(this.x + ux * 14, this.y + uy * 14,
+            ux * this.tearSpeed, uy * this.tearSpeed, weaponDmg(this, w), 8, true,
+            { life: this.tearLife, bulletKey: 'chrys', spId: 'chrys', pierce: this.pierce,
+              deathBurst: { key: 'petal', n: 4 + Math.min(2, lvl - 1), dmgMul: .35, sp: this.tearSpeed * .75, life: 26, jit: .15, fx: 'petal' } }));
+          SFX.play('shoot');
+        } else if (w.id === 'pin') {
+          room.tears.push(new Tear(this.x + ux * 14, this.y + uy * 14,
+            ux * this.tearSpeed * 1.1, uy * this.tearSpeed * 1.1, weaponDmg(this, w), 7, true,
+            { life: 70, bulletKey: 'pin', spId: 'pin', convert: 'pin', pinR: 26 + (lvl >= 5 ? 6 : 0) }));
+          SFX.play('shoot');
+        } else if (w.id === 'rail') {
+          this.fireRail(room, ux, uy, lvl);
+        } else if (w.id === 'duck') {
+          room.tears.push(new Tear(this.x + ux * 14, this.y + uy * 14,
+            ux * this.tearSpeed, uy * this.tearSpeed, weaponDmg(this, w), 7.5, true,
+            { life: 110, bulletKey: 'duck', spId: 'duck', bounces: 2 + lvl, pierce: this.pierce, homing: this.homing }));
+          SFX.play('shoot');
+        } else if (w.id === 'hive') {
+          room.tears.push(new Tear(this.x + ux * 14, this.y + uy * 14,
+            ux * this.tearSpeed * .9, uy * this.tearSpeed * .9, weaponDmg(this, w), 10, true,
+            { life: 60, bulletKey: 'hive', spId: 'hive',
+              deathBurst: { key: 'bee', n: 3 + Math.min(2, lvl - 1), dmgMul: .55, sp: 4.6, life: 70, homing: true, fx: 'hivex' } }));
+          SFX.play('shoot');
+        } else if (w.id === 'vortex') {
+          room.tears.push(new Tear(this.x + ux * 14, this.y + uy * 14,
+            ux * this.tearSpeed, uy * this.tearSpeed, weaponDmg(this, w), 9, true,
+            { life: 34, bulletKey: 'core', spId: 'vortex', passthrough: true, convert: 'vortex', vR: 52 + lvl * 4 }));
+          SFX.play('shoot');
+        } else if (w.id === 'twin') {
+          for (let i = 0; i < this.shotsPerDir; i++) this.q.push({ dx: ux, dy: uy, d: i * 7, kind: 'tear', wid: 'twin' });
+          const ns = 1 + (lvl >= 3 ? 1 : 0);
+          for (let i = 0; i < ns; i++) this.q.push({ dx: ux, dy: uy, d: randi(6, 8) + i * 7, kind: 'shadow', wid: 'twin', bulletKey: 'shadow', dmgMul: .5 });
+          game.fx.push({ type: 'clone', x: this.x - ux * 18, y: this.y - uy * 18, ang: Math.atan2(uy, ux), lvl, char: this.char || 0, t: 12, t0: 12 });
         }
       }
     }
     if (this.cd > 0) this.cd--;
     for (const s of this.q) {
       if (--s.d <= 0) {
-        const j = (s.kind === 'tear') ? (Math.random() - .5) * .06 : 0;
+        const j = (s.kind === 'tear' || !s.kind) ? (Math.random() - .5) * .06 : 0;
         const c = Math.cos(j), sn = Math.sin(j);
         const dx = s.dx * c - s.dy * sn, dy = s.dx * sn + s.dy * c;
         room.tears.push(new Tear(
           this.x + dx * 16, this.y + dy * 16,
           dx * this.tearSpeed, dy * this.tearSpeed,
-          weaponDmg(this, WEAPONS.tear), this.tearR, true,
-          { life: this.tearLife, homing: this.homing, big: this.tearR > 9, pierce: this.pierce }
+          weaponDmg(this, WEAPONS[s.wid || 'tear']) * (s.dmgMul === undefined ? 1 : s.dmgMul),
+          s.r || this.tearR, true,
+          { life: s.life || this.tearLife, homing: this.homing, big: this.tearR > 9, pierce: this.pierce,
+            bulletKey: s.bulletKey || null, spId: s.wid || 'tear' }
         ));
-        SFX.play('shoot');
+        if (!s.bulletKey) SFX.play('shoot'); // 影弹静音，听觉上是"一枪+回声"
       }
     }
     this.q = this.q.filter(s => s.d > 0);
@@ -365,8 +577,8 @@ class Enemy {
       if (room.quota && !room.cleared && this.cfg.id !== 'minifly') room.killed++; // 分裂仔喂配额会让"真怪"提前清零，不计
       game.gainXp(Math.ceil(this.maxHp / 2));
       game.runCoins += 2; game.runEarned += 2; Meta.add(2);
-      if (Math.random() < .06) // 刷怪流：武器持续掉落
-        room.pickups.push(new Pickup('weapon', this.x, this.y, null, 0, pickWeaponId(game.player)));
+      const wDrop = Math.random() < .06 ? pickWeaponId(game.player) : null; // 刷怪流：已拥有武器持续掉落
+      if (wDrop) room.pickups.push(new Pickup('weapon', this.x, this.y, null, 0, wDrop));
       if (game.player.vamp > 0 && Math.random() < game.player.vamp)
         room.pickups.push(new Pickup('halfheart', this.x, this.y));
       if (this.elite) // 精英必掉 1 资源，风险回报成立
@@ -683,7 +895,8 @@ class Pickup {
     if (p.weapon.id === this.wid) {
       if (p.weapon.lvl < wd.max) p.weapon.lvl++;
       else p.dmg += .3; // 满级后转化为永久伤害
-    } else p.weapon = { id: this.wid, lvl: 1 };
+    } else { p.weapon = { id: this.wid, lvl: 1 }; p.q = []; } // 换枪即收起已排队的旧枪连射（影弹不从新枪里射出）
+    ownWeapon(this.wid, p.weapon.lvl); // 武器库：记录拥有 + 历史最高 Lv
     SFX.play('item'); this.dead = true;
     game.toast = { item: { name: `${wd.name} Lv${p.weapon.lvl}`, desc: wd.desc, color: wd.c }, t: 160 };
     if (!game.taughtWeapon) {
@@ -746,9 +959,9 @@ function openChest(room, c) {
   SFX.play('doorOpen'); c.dead = true;
   spawnParticles(room, c.x, c.y, 14, '#e8c85e', 3);
   const def = randomItem(p);
-  const wRoll = Math.random() < .35;
-  if (wRoll || def) {
-    const it = wRoll ? new Pickup('weapon', c.x, c.y - 6, null, 0, pickWeaponId(p))
+  const wid = Math.random() < .35 ? pickWeaponId(p) : null;
+  if (wid || def) {
+    const it = wid ? new Pickup('weapon', c.x, c.y - 6, null, 0, wid)
       : new Pickup('item', c.x, c.y - 6, def);
     if (room.finalChest) it.win = true;
     room.pickups.push(it);
@@ -760,14 +973,63 @@ function openChest(room, c) {
   room.pickups.push(new Pickup(choice(['heart', 'coin']), c.x + 26, c.y + 8));
 }
 
-// ── 武器系统：四种枪，拾取换装/升级（重复拾取 +1 级，最高 5 级）──
+// ── 武器系统：14 把枪，抽卡解锁入武器库，局内拾取换装/升级（重复拾取 +1 级，最高 5 级）──
 const WEAPONS = {
-  tear:  { id: 'tear',  name: '制式冲锋枪', c: '#9cc4ee', glyph: '枪', cd: 13, mult: 1,   max: 5, desc: '均衡的基础火力' },
-  laser: { id: 'laser', name: '激光枪', c: '#ff5f5f', glyph: '激', cd: 30, mult: 2.8, max: 5, desc: '贯穿一切的光束' },
-  light: { id: 'light', name: '闪电枪', c: '#ffe066', glyph: '雷', cd: 22, mult: 1.8, max: 5, desc: '在敌人间跳跃的电弧' },
-  flame: { id: 'flame', name: '火焰枪', c: '#ff9040', glyph: '焰', cd: 11, mult: .5,  max: 5, desc: '近距扇形烈焰，以量取胜' },
+  tear:  { id: 'tear',  name: '制式冲锋枪', c: '#9cc4ee', glyph: '枪', cd: 13, mult: 1,   max: 5, rar: null, desc: '均衡的基础火力' },
+  laser: { id: 'laser', name: '激光枪', c: '#ff5f5f', glyph: '激', cd: 30, mult: 2.8, max: 5, rar: 'SR', desc: '贯穿一切的光束' },
+  light: { id: 'light', name: '闪电枪', c: '#ffe066', glyph: '雷', cd: 22, mult: 1.8, max: 5, rar: 'SR', desc: '在敌人间跳跃的电弧' },
+  flame: { id: 'flame', name: '火焰枪', c: '#ff9040', glyph: '焰', cd: 11, mult: .5,  max: 5, rar: 'R',  desc: '近距扇形烈焰，以量取胜' },
+  sickle: { id: 'sickle', name: '骨镰回旋镖', c: '#cbb98a', glyph: '镰', cd: 26, mult: 1.35, max: 5, rar: 'SR', desc: '掷出折返，去回两段都能砍人' },
+  mortar: { id: 'mortar', name: '罐罐雷', c: '#a8c05a', glyph: '罐', cd: 40, mult: 2.6, max: 5, rar: 'SSR', desc: '抛物罐雷落地爆炸，焦土留痕' },
+  whip:   { id: 'whip',   name: '荆棘鞭',   c: '#b04a6a', glyph: '鞭', cd: 24, mult: 1.9, max: 5, rar: 'SR', desc: '近身扇形鞭击，一发横扫一片' },
+  chrys:  { id: 'chrys',  name: '千瓣菊',   c: '#f2c4d4', glyph: '菊', cd: 18, mult: 1.15,  max: 5, rar: 'R',  desc: '主弹碎裂成花瓣飞散' },
+  pin:    { id: 'pin',    name: '刺猬钉',   c: '#9b8fd0', glyph: '钉', cd: 30, mult: 1.1, max: 5, rar: 'SR', desc: '钉落地成刺，扎穿踩上来的敌人' },
+  rail:   { id: 'rail',   name: '穿云枪',   c: '#7fe0d8', glyph: '云', cd: 48, mult: 4.5, max: 5, rar: 'SSR', desc: '蓄满即发，一线贯穿全屋' },
+  duck:   { id: 'duck',   name: '橡皮鸭',   c: '#f2cf3a', glyph: '鸭', cd: 9,  mult: .55, max: 5, rar: 'R',  desc: '嘎？会弹墙的橡皮鸭' },
+  hive:   { id: 'hive',   name: '工蜂箱',   c: '#e0a83c', glyph: '蜂', cd: 34, mult: 1.3, max: 5, rar: 'SR', desc: '蜂巢炸裂，放蜂追猎' },
+  vortex: { id: 'vortex', name: '漩涡核',   c: '#8f6fd8', glyph: '旋', cd: 60, mult: 2,   max: 5, rar: 'SSR', desc: '漩涡吸聚敌人，塌缩引爆' },
+  twin:   { id: 'twin',   name: '双影铳',   c: '#c8c0e8', glyph: '影', cd: 16, mult: .8,  max: 5, rar: 'R',  desc: '实体弹后跟着影弹，双倍节拍' },
 };
 function weaponDmg(p, w) { return p.dmg * w.mult * (1 + .35 * (p.weapon.lvl - 1)); }
+
+// ── 武器库（账号拥有制）：捡到过的枪记录历史最高 Lv，随云存档 weapons 字段同步 ──
+function weaponOwned(id) { const d = Meta.load(); return !!(d.weapons && d.weapons[id]); }
+function ownWeapon(id, lvl) {
+  const d = Meta.load();
+  d.weapons = d.weapons || {};
+  d.weapons.tear = Math.max(1, d.weapons.tear || 0); // 制式枪永远拥有
+  d.weapons[id] = Math.max(d.weapons[id] || 0, lvl || 1);
+  Meta.save();
+}
+// 抽卡池：SSR 6% / SR 28% / R 66%（ten-pull 保底 ≥1 SR）
+const GACHA_POOL = { SSR: ['rail', 'vortex', 'mortar'], SR: ['sickle', 'whip', 'hive', 'pin', 'laser', 'light'], R: ['chrys', 'duck', 'twin', 'flame'] };
+function rollGachaId() {
+  const r = Math.random();
+  return choice(GACHA_POOL[r < .06 ? 'SSR' : r < .34 ? 'SR' : 'R']);
+}
+function gachaPull(n) {
+  const d = Meta.load();
+  const base = n === 10 ? 1200 : 150 * n;
+  const tickets = Math.min(d.gachaTickets || 0, n);
+  const cost = Math.max(0, base - tickets * 150);
+  if (d.coins < cost) return null;
+  d.coins -= cost;
+  d.gachaTickets = (d.gachaTickets || 0) - tickets;
+  const ids = [];
+  for (let i = 0; i < n; i++) ids.push(rollGachaId());
+  if (n === 10 && !ids.some(id => WEAPONS[id].rar === 'SR' || WEAPONS[id].rar === 'SSR')) ids[n - 1] = choice(GACHA_POOL.SR);
+  let refund = 0;
+  const results = ids.map(id => {
+    const dup = weaponOwned(id);
+    if (dup) refund += 80; else ownWeapon(id, 1);
+    return { id, rar: WEAPONS[id].rar, dup };
+  });
+  if (refund) d.coins += refund;
+  Meta.save();
+  if (window.CloudSave) CloudSave.queue();
+  SFX.play(tickets > 0 ? 'item' : 'coin');
+  return { cost, tickets, refund, results };
+}
 
 // ── 被动道具池 ──
 const ITEMS = [
@@ -804,15 +1066,16 @@ function randomItem(p) {
   const pool = ITEMS.filter(i => !p.items.some(x => x.id === i.id));
   return pool.length ? choice(pool) : null; // 池耗尽返回 null，由生成点折算金币
 }
-// 掉武器偏好：优先未拿的枪型或低等级枪
+// 掉武器偏好：只在「已拥有 ∧ 未满级」的枪里随机；无可选→null（调用方降级为道具）
 function pickWeaponId(p) {
-  const ids = ['tear', 'laser', 'light', 'flame'];
+  const ids = Object.keys(WEAPONS).filter(weaponOwned);
   const fresh = ids.filter(id => id !== p.weapon.id || p.weapon.lvl < WEAPONS[id].max);
-  return choice(fresh.length ? fresh : ids);
+  return fresh.length ? choice(fresh) : null;
 }
-// 奖励生成：35% 概率是武器，否则被动道具（池尽折金币由调用方兜底）
+// 奖励生成：35% 概率是武器（需有可掉枪），否则被动道具（池尽折金币由调用方兜底）
 function makeRewardPickup(x, y, p, winFlag) {
-  if (Math.random() < .35) return new Pickup('weapon', x, y, null, 0, pickWeaponId(p));
+  const wid = Math.random() < .35 ? pickWeaponId(p) : null;
+  if (wid) return new Pickup('weapon', x, y, null, 0, wid);
   return new Pickup('item', x, y, randomItem(p));
 }
 Player.prototype.applyItem = function (item) {

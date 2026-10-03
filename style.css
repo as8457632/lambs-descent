@@ -86,7 +86,7 @@ body {
   margin: 0;
 }
 
-#fsbtn { z-index: 40; position: relative; } /* 强制横屏时按钮不被 fixed 画布盖住 */
+#fsbtn { z-index: 40; position: fixed; top: calc(env(safe-area-inset-top, 0px) + 6px); left: calc(env(safe-area-inset-left, 0px) + 8px); font-size: 12px; padding: 6px 12px; } /* v4.3 P0：浮层化，不再把画布整体下挤裁掉面板底部 */
 
 /* 强制横屏中：退出按钮贴屏幕左上角小尺寸（=画布 HUD 角），不压战场与配额条 */
 body.rot #fsbtn {

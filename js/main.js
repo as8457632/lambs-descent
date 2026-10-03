@@ -18,7 +18,7 @@ const game = {
 function shake(n) { game.shakeAmt = Math.max(game.shakeAmt, n); }
 
 let cv, cx;
-const BUILD = 'v4.2.1'; // 版本号水印：确认玩家加载的是否为最新构建
+const BUILD = 'v4.3'; // 版本号水印：确认玩家加载的是否为最新构建
 window.__BUILD = BUILD;
 window.DBG_VP = () => ({ build: BUILD, inner: [innerWidth, innerHeight], vv: window.visualViewport ? [Math.round(visualViewport.width), Math.round(visualViewport.height)] : null, dpr: devicePixelRatio, css: [Math.round(cv ? cv.getBoundingClientRect().width : 0), Math.round(cv ? cv.getBoundingClientRect().height : 0)] });
 
@@ -214,6 +214,7 @@ function enterRoom(room, fromDir) {
   game.fx = [];
   if (!room.visited) { room.visited = true; game.roomsSeen++; }
   room.tears = []; // 敌方弹幕进房即散
+  room.vortexes = []; // 漩涡场随进房重置（钉子/焦土作为战场痕迹保留）
 
   let ex = WORLD_W / 2, ey = WORLD_H / 2;
   if (fromDir) {
@@ -273,7 +274,7 @@ function update() {
     if (Input.pressed('Enter')) newRun(game.selStage);
     else if (Input.pressed('KeyS')) { game.workshopFrom = 'title'; game.state = 'workshop'; }
     else if (mt && inZone(mt, workshopBtnZone())) { game.workshopFrom = 'title'; game.state = 'workshop'; }
-    else if (mt && inZone(mt, acctBtnZone())) { game.state = 'account'; SFX.play('coin'); Touch.tapped = false; return; }
+    else if (mt && inZone(mt, acctBtnZone())) { game.state = 'account'; game.acctTab = 'main'; SFX.play('coin'); Touch.tapped = false; return; }
     else if (mt && !onStageBtn && !onCharCard && !inZone(mt, acctBtnZone())) newRun(game.selStage); // 点选人/选关/账号区外才开局
     else if (Touch.tapped) newRun(game.selStage);
     Touch.tapped = false;
@@ -281,13 +282,43 @@ function update() {
   }
   if (game.state === 'account') {
     const mt = Touch.menuTap; Touch.menuTap = null;
-    if (Input.pressed('Escape') || !window.prompt) { if (Input.pressed('Escape')) { game.state = 'title'; Touch.tapped = false; return; } }
+    if (game.gachaResult && --game.gachaResult.t <= 0) game.gachaResult = null; // 抽卡结果自动淡出
+    if (game.toast) { game.toast.t--; if (game.toast.t <= 0) game.toast = null; }
+    if (Input.pressed('Escape')) {
+      if (game.acctTab === 'armory') game.acctTab = 'main';
+      else { game.state = 'title'; Touch.tapped = false; return; }
+    }
+    if (game.acctTab === 'armory') {
+      if (mt || Touch.tapped) {
+        Touch.tapped = false;
+        const z = armoryZones();
+        if (mt && inZone(mt, z.single)) doGacha(1);
+        else if (mt && inZone(mt, z.ten)) doGacha(10);
+        else if (mt && inZone(mt, z.back)) game.acctTab = 'main';
+        else if (game.gachaResult) game.gachaResult = null; // 点空白先收起抽卡结果（v4.3-F3），再点才返回
+        else if (mt) {
+          const cell = z.cells.find(c => inZone(mt, c));
+          if (cell) {
+            const w = WEAPONS[cell.id], own = weaponOwned(cell.id);
+            game.toast = { item: { name: `${w.name}${w.rar ? ` [${w.rar}]` : ''}`, desc: own ? w.desc : '未解锁 —— 抽卡获得后局内才会掉落', color: own ? w.c : '#8a7560' }, t: 220 };
+            SFX.play('shoot');
+          } else game.acctTab = 'main';
+        } else game.gachaResult = null;
+      }
+      return;
+    }
     if (mt || Touch.tapped) {
-      const hit = mt || Touch.menuTap; Touch.tapped = false;
+      const hit = mt; Touch.tapped = false;
       const rows = acctRowsZones();
       const pick = hit ? rows.find(r => inZone(hit, r)) : null;
-      const key = pick ? pick.id : 'back';
-      if (key === 'back' || key === 'status') game.state = 'title';
+      if (!pick) { if (!hit) game.state = 'title'; return; } // v4.3-F3：点空白不再误判返回
+      const key = pick.id;
+      if (key === 'back') game.state = 'title';
+      else if (key === 'armory') game.acctTab = 'armory';
+      else if (key === 'status') {
+        if (!CloudSave.api) { game.toast = { item: { name: '未配置服务器', desc: '先在下方「服务器」行填写地址', color: '#c9a24a' }, t: 220 }; SFX.play('deny'); }
+        else CloudSave.login().then(ok => { game.toast = { item: { name: ok ? '登录成功' : '连不上，本地继续玩', desc: ok ? `账号 #${CloudSave.profile.id} 已绑定` : '已保留本地存档', color: ok ? '#7fae5a' : '#c9a24a' }, t: 240 }; if (ok) CloudSave.queue(); });
+      }
       else if (key === 'nick') {
         const n = prompt('输入昵称（≤12 字）', Meta.load().nickname || '');
         if (n && n.trim()) { Meta.load().nickname = n.trim().slice(0, 12); Meta.save(); CloudSave.queue(); SFX.play('coin'); }
@@ -388,6 +419,7 @@ function update() {
   if (room.boss && !room.boss.dead) room.boss.update(room);
   const tearN = room.tears.length; // 快照长度迭代：分裂弹 push 不再同帧二次更新
   for (let i = 0; i < tearN; i++) room.tears[i].update(room);
+  updateHazards(room); // v4.3 场地危险实体：刺猬钉 / 漩涡核
   for (const pk of room.pickups) if (!pk.dead) pk.update(room);
 
   handleCollisions(room);
@@ -426,14 +458,17 @@ function update() {
 function handleCollisions(room) {
   const p = game.player;
   for (const tr of room.tears) {
-    if (tr.dead) continue;
+    if (tr.dead || tr.passthrough) continue; // 漩涡核飞行段不与任何实体碰撞
     if (tr.isPlayer) {
       let hit = false;
       for (const e of room.enemies) {
         if (!e.dead && !(tr.hits || (tr.hits = [])).includes(e) &&
             dist2(tr.x, tr.y, e.x, e.y) < tr.r + e.r) {
+          if (tr.fuseT !== undefined) { // 罐罐雷贴身引爆：伤害只走 plop 的爆炸 AoE，不直伤+爆炸双算
+            hit = true; break;
+          }
           e.hit(tr.dmg, room, tr.x, tr.y);
-          game.fx.push({ type: 'spark', id: tr.isPlayer ? (tr.colorKey === 'spark' ? 'light' : 'tear') : 'tear', x: tr.x, y: tr.y, ang: Math.atan2(-tr.vy, -tr.vx), r: tr.r + 5, t: 12, t0: 12 });
+          game.fx.push({ type: 'spark', id: tr.spId || (tr.colorKey === 'spark' ? 'light' : 'tear'), x: tr.x, y: tr.y, ang: Math.atan2(-tr.vy, -tr.vx), r: tr.r + 5, t: 12, t0: 12 });
           tr.hits.push(e);
           if (tr.pierce > 0) { tr.pierce--; } // 穿透：不消失，换下一个目标
           else { hit = true; }
@@ -444,16 +479,16 @@ function handleCollisions(room) {
       if (!hit && room.boss && !room.boss.dead &&
           dist2(tr.x, tr.y, room.boss.x, room.boss.y) < tr.r + room.boss.r * .85) {
         room.boss.hit(tr.dmg); hit = true;
-        game.fx.push({ type: 'spark', id: 'laser', x: tr.x, y: tr.y, ang: Math.atan2(-tr.vy, -tr.vx), r: tr.r + 5, t: 12, t0: 12 });
+        game.fx.push({ type: 'spark', id: tr.spId || 'laser', x: tr.x, y: tr.y, ang: Math.atan2(-tr.vy, -tr.vx), r: tr.r + 5, t: 12, t0: 12 });
       }
       if (!hit) for (const o of room.props) {
         if (!o.dead && o.kind === 'junk' && dist2(tr.x, tr.y, o.x, o.y) < tr.r + 14) {
           damageProp(room, o, tr.dmg); hit = true; break;
         }
       }
-      if (hit) tr.plop(room);
+      if (hit) tr.plop(room, 'hit');
     } else if (p.inv <= 0 && dist2(tr.x, tr.y, p.x, p.y) < tr.r + p.r * .75) {
-      p.hurt(tr.dmg, game, tr.x, tr.y, '敌方弹幕'); tr.plop(room);
+      p.hurt(tr.dmg, game, tr.x, tr.y, '敌方弹幕'); tr.plop(room, 'hit');
     }
   }
   // 接触伤害（出生动画期间的敌人不伤人；双向击退制造挨打感）
@@ -481,6 +516,12 @@ function onRoomCleared(room) {
     room.boss = null; room.hasEnemiesPlanned = false;
     game.gainXp(30 + 10 * game.floorNum);
     game.runCoins += 40 + 20 * game.floorNum; game.runEarned += 40 + 20 * game.floorNum; Meta.add(40 + 20 * game.floorNum);
+    const mt = Meta.load(); // 新手保护：生涯首杀 Boss 送 1 张军械券（军械库免费单抽，防开局只有制式枪无聊）
+    if (!mt.ticketGiven) {
+      mt.ticketGiven = true; mt.gachaTickets = (mt.gachaTickets || 0) + 1; Meta.save();
+      game.hint = { text: '获得「军械券」×1！标题→账号→军械库可兑换一次免费单抽', t: 320 };
+      SFX.play('item');
+    }
     const cxr = WORLD_W / 2, cyr = WORLD_H / 2;
     room.pickups.push(new Pickup('chest', cxr - 40, cyr));
     if (game.floorNum < 3) room.trapdoor = { x: cxr + 44, y: cyr };
@@ -491,7 +532,8 @@ function onRoomCleared(room) {
     if (!room.boss && !game.taughtDoor) { game.taughtDoor = true; game.hint = { text: '门已开！看小地图找亮格，走到房间边缘的门撤离', t: 240 }; }
     if (room.type === 'normal' && !game.floor.gaveStarter) {
       game.floor.gaveStarter = true;
-      game.cur.pickups.push(new Pickup('weapon', WORLD_W / 2 + rand(-40, 40), WORLD_H / 2 + rand(-30, 30), null, 0, pickWeaponId(game.player)));
+      const sw = pickWeaponId(game.player);
+      if (sw) game.cur.pickups.push(new Pickup('weapon', WORLD_W / 2 + rand(-40, 40), WORLD_H / 2 + rand(-30, 30), null, 0, sw));
       game.hint = { text: '拾取武器：同一把枪再捡会升级，换枪会归零', t: 240 };
     }
   }
@@ -548,7 +590,7 @@ function draw() {
 
   if (game.state === 'title') { drawTitle(); return; }
   if (game.state === 'workshop') { drawWorkshop(cx, game); return; }
-  if (game.state === 'account') { drawAccountPanel(cx, game); return; } // 面板态短路，不走战场渲染
+  if (game.state === 'account') { (game.acctTab === 'armory' ? drawArmoryPanel : drawAccountPanel)(cx, game); return; } // 面板态短路，不走战场渲染
 
   const pal = themePal(game.theme || THEMES[0], game.floorNum);
   cx.save();
@@ -557,6 +599,7 @@ function draw() {
   cx.translate(Math.round(-game.cam.x + shx), Math.round(HUD_H - game.cam.y + shy));
 
   drawRoom(cx, game.cur, pal, game.time);
+  drawHazards(cx, game.cur, game.time); // v4.3 钉子/漩涡（地面之上、拾取物之下）
   for (const pk of game.cur.pickups) if (!pk.dead) drawPickup(cx, pk, game.time);
   for (const e of game.cur.enemies) drawEnemy(cx, e, game.time);
   if (game.cur.boss && !game.cur.boss.dead) drawBoss(cx, game.cur.boss, game.time);
@@ -782,26 +825,140 @@ function drawAccountPanel(cx, g) {
   cx.fillText('账 号', CANVAS_W / 2, 90);
   const rows = acctRowsZones();
   const m = Meta.load();
+  const ownedN = Object.keys(WEAPONS).filter(weaponOwned).length;
   const labels = [
     ['status', CloudSave.token ? (CloudSave.online ? `已登录：账号 #${CloudSave.profile && CloudSave.profile.id} · 云同步✓` : '已登录 · 当前离线（本地暂存，恢复后自动补传）') : '未登录 —— 点这里登录（连不上则本地存档照常玩）'],
     ['nick', `昵称：${m.nickname || '（未设置，点这里填写）'}`],
     ['server', `服务器：${CloudSave.api || '（未设置 = 纯本地存档，点这里填写）'}`],
     ['export', '导出存档码（复制给新设备）'],
     ['import', '导入存档码（粘贴后自动重载）'],
+    ['armory', `军械库：已拥有 ${ownedN}/14 把 · 军械券×${m.gachaTickets || 0} —— 点这里抽枪`],
     ['back', '返 回'],
   ];
   rows.forEach((r, i) => {
     const [id, text] = labels[i];
     cx.fillStyle = id === 'back' ? 'rgba(60,44,26,.6)' : 'rgba(24,18,12,.9)';
     cx.beginPath(); cx.roundRect(r.x, r.y, r.w, r.h, 8); cx.fill();
-    cx.strokeStyle = id === 'status' && CloudSave.online ? '#7fae5a' : '#4a382a'; cx.lineWidth = 1.5;
+    cx.strokeStyle = id === 'status' && CloudSave.online ? '#7fae5a' : id === 'armory' ? '#8a6f3a' : '#4a382a'; cx.lineWidth = 1.5;
     cx.beginPath(); cx.roundRect(r.x, r.y, r.w, r.h, 8); cx.stroke();
-    cx.fillStyle = id === 'status' ? (CloudSave.token ? '#b8d8a8' : '#e0d0b8') : '#cbb59a';
+    cx.fillStyle = id === 'status' ? (CloudSave.token ? '#b8d8a8' : '#e0d0b8') : id === 'armory' ? '#e8c85e' : '#cbb59a';
     cx.font = '13px monospace'; cx.textAlign = 'center';
-    cx.fillText(text.slice(0, 44), r.x + r.w / 2, r.y + 27);
+    cx.fillText(text.length > 44 ? text.slice(0, 41) + '…' : text, r.x + r.w / 2, r.y + 29);
   });
+  drawPanelToast(cx);
   cx.fillStyle = '#5a4c42'; cx.font = '10px monospace';
   cx.fillText('微信/抖音小游戏登录通道已预留（platform.js），当前为游客+服务器账号', CANVAS_W / 2, CANVAS_H - 18);
+  cx.textAlign = 'left';
+}
+
+// 账号/军械库面板顶部 toast（v4.3-F3：状态行登录结果等反馈不再只活在标题屏）
+function drawPanelToast(cx) {
+  if (!game.toast) return;
+  cx.globalAlpha = Math.min(1, game.toast.t / 40);
+  cx.fillStyle = 'rgba(20,14,8,.94)';
+  cx.beginPath(); cx.roundRect(CANVAS_W / 2 - 230, 10, 460, 44, 8); cx.fill();
+  cx.strokeStyle = game.toast.item.color; cx.lineWidth = 2;
+  cx.beginPath(); cx.roundRect(CANVAS_W / 2 - 230, 10, 460, 44, 8); cx.stroke();
+  cx.fillStyle = game.toast.item.color; cx.font = 'bold 14px monospace'; cx.textAlign = 'center';
+  cx.fillText(game.toast.item.name, CANVAS_W / 2, 28);
+  cx.fillStyle = '#cbb59a'; cx.font = '11px monospace';
+  const d = game.toast.item.desc;
+  cx.fillText(d.length > 40 ? d.slice(0, 37) + '…' : d, CANVAS_W / 2, 45);
+  cx.globalAlpha = 1;
+}
+
+// ── v4.3 军械库：抽卡解锁武器（SSR6%/SR28%/R66%，十连保 ≥1 SR，重复返 80 币）──
+function doGacha(n) {
+  const r = gachaPull(n);
+  if (!r) { SFX.play('deny'); game.gachaResult = { fail: true, n, t: 360 }; return; }
+  game.gachaResult = Object.assign({ n, t: 600 }, r);
+}
+const RAR_C = { SSR: '#f2c45e', SR: '#b093e8', R: '#8ecbff' };
+function drawArmoryPanel(cx, g) {
+  cx.fillStyle = '#0a0806'; cx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+  const m = Meta.load();
+  cx.fillStyle = '#e8c85e'; cx.font = 'bold 20px monospace'; cx.textAlign = 'center';
+  cx.fillText('军 械 库', CANVAS_W / 2, 46);
+  cx.fillStyle = '#cbb59a'; cx.font = '11px monospace';
+  cx.fillText(`金币 ${m.coins} · 军械券 ×${m.gachaTickets || 0} · 局内只会掉落你已拥有的枪`, CANVAS_W / 2, 68);
+  const z = armoryZones();
+  z.cells.forEach(c => {
+    const w = WEAPONS[c.id], owned = weaponOwned(c.id);
+    cx.fillStyle = owned ? 'rgba(30,22,14,.95)' : 'rgba(26,21,16,.95)';
+    cx.beginPath(); cx.roundRect(c.x, c.y, c.w, c.h, 7); cx.fill();
+    cx.strokeStyle = owned ? w.c : '#4a3c2c'; cx.lineWidth = owned ? 2 : 1.2;
+    cx.beginPath(); cx.roundRect(c.x, c.y, c.w, c.h, 7); cx.stroke();
+    cx.save(); cx.beginPath(); cx.arc(c.x + 22, c.y + 24, 13, 0, TAU);
+    cx.fillStyle = owned ? w.c : '#3a3026'; cx.fill();
+    cx.fillStyle = owned ? '#1a120a' : '#8a7560'; cx.font = 'bold 14px monospace';
+    cx.fillText(w.glyph, c.x + 22, c.y + 29);
+    cx.textAlign = 'left'; cx.font = 'bold 11px monospace';
+    cx.fillStyle = owned ? '#e8dcc4' : '#9a8468';
+    cx.fillText(owned ? w.name : '？？？', c.x + 40, c.y + 22);
+    cx.font = '10px monospace'; cx.fillStyle = owned ? '#a8937c' : '#7a6a54';
+    cx.fillText(owned ? `历史 Lv${m.weapons[c.id] || 1}` : '抽卡解锁', c.x + 40, c.y + 37);
+    if (w.rar && w.rar !== 'R') { // 稀有度角标（R 太常见不打标）
+      cx.fillStyle = RAR_C[w.rar]; cx.font = 'bold 9px monospace'; cx.textAlign = 'right';
+      cx.fillText(w.rar, c.x + c.w - 6, c.y + 12);
+    }
+    cx.textAlign = 'center';
+    cx.restore();
+  });
+  const t = m.gachaTickets || 0;
+  const btn = (r, label, sub, afford) => {
+    cx.fillStyle = afford ? 'rgba(40,28,14,.95)' : 'rgba(18,15,12,.9)';
+    cx.beginPath(); cx.roundRect(r.x, r.y, r.w, r.h, 8); cx.fill();
+    cx.strokeStyle = afford ? '#e8c85e' : '#3a3128'; cx.lineWidth = 2;
+    cx.beginPath(); cx.roundRect(r.x, r.y, r.w, r.h, 8); cx.stroke();
+    cx.fillStyle = afford ? '#e8dcc4' : '#57493a'; cx.font = 'bold 15px monospace';
+    cx.fillText(label, r.x + r.w / 2, r.y + 20);
+    cx.font = '10px monospace'; cx.fillStyle = afford ? '#a8937c' : '#3f342a';
+    cx.fillText(sub, r.x + r.w / 2, r.y + 36);
+  };
+  const tenCost = Math.max(0, 1200 - 150 * Math.min(t, 10));
+  btn(z.single, '单抽', t > 0 ? `券抵 150 · 免费（余${t}）` : '150 金币', t > 0 || m.coins >= 150);
+  btn(z.ten, '十连', tenCost === 1200 ? '1200 金币 · 必出SR+' : `${tenCost} 金币（${Math.min(t, 10)}券抵扣）· 必出SR+`, t > 0 || m.coins >= 1200);
+  cx.fillStyle = '#8a7560'; cx.font = '12px monospace';
+  cx.fillText('返 回', z.back.x + z.back.w / 2, z.back.y + 22);
+  cx.strokeStyle = '#4a382a'; cx.lineWidth = 1.5;
+  cx.beginPath(); cx.roundRect(z.back.x, z.back.y, z.back.w, z.back.h, 6); cx.stroke();
+  // v4.3-F3：抽卡结果改「分组摘要」——新枪逐把（稀有度配色）+ 重复合并一行，18px 行距不再糊字
+  const res = g.gachaResult;
+  if (res) {
+    cx.globalAlpha = Math.min(1, res.t / 60);
+    if (res.fail) {
+      cx.fillStyle = '#c4303a'; cx.font = 'bold 14px monospace';
+      cx.fillText(`金币不足：${res.n === 10 ? '十连需 1200' : '单抽需 150'} 金币`, CANVAS_W / 2, 396);
+    } else {
+      const fresh = res.results.filter(r => !r.dup);
+      const dupN = res.results.length - fresh.length;
+      cx.font = 'bold 13px monospace';
+      if (fresh.length) {
+        cx.fillStyle = '#cbb59a'; cx.textAlign = 'left';
+        const head = `新枪 ×${fresh.length}：`;
+        let y390 = 390;
+        cx.fillText(head, CANVAS_W / 2 - 220, y390);
+        let x = CANVAS_W / 2 - 220 + cx.measureText(head).width + 2;
+        fresh.forEach((r, i) => {
+          const w = WEAPONS[r.id], seg = `${w.name}[${w.rar}]${i < fresh.length - 1 ? '、' : ''}`;
+          cx.fillStyle = RAR_C[w.rar] || '#cbb59a';
+          if (x + cx.measureText(seg).width > CANVAS_W / 2 + 220) { x = CANVAS_W / 2 - 220; y390 += 18; }
+          cx.fillText(seg, x, y390); x += cx.measureText(seg).width;
+        });
+        cx.textAlign = 'center';
+      } else {
+        cx.fillStyle = '#8a7560';
+        cx.fillText('全是重复 —— 已自动折算金币', CANVAS_W / 2, 390);
+      }
+      cx.fillStyle = '#a8937c'; cx.font = '11px monospace';
+      cx.fillText(`花 ${res.cost}${res.tickets ? `（券×${res.tickets}）` : ''}${dupN ? ` · 重复×${dupN} 返还 ${res.refund}` : ''} —— 点任意处关闭`, CANVAS_W / 2, 416);
+    }
+    cx.globalAlpha = 1; cx.textAlign = 'left';
+  } else {
+    cx.fillStyle = '#5a4c42'; cx.font = '10px monospace';
+    cx.fillText('概率：SSR 6% · SR 28% · R 66%｜重复枪自动折算金币｜点枪格看介绍', CANVAS_W / 2, 400);
+  }
+  drawPanelToast(cx);
   cx.textAlign = 'left';
 }
 

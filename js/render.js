@@ -33,6 +33,8 @@ function drawRoom(ctx, room, pal, t) {
     ctx.fillStyle = `rgba(${b.c},${b.al})`;
     ctx.beginPath(); ctx.ellipse(b.x, b.y, b.r, b.r * .55, b.a, 0, TAU); ctx.fill();
   }
+  // v4.3 罐罐雷焦土（地面常驻贴花，同血渍用法）
+  for (const s of room.scorch || []) QArt.scorchDecal(ctx, { x: s.x, y: s.y, r: s.r, a: s.a, al: s.al });
 
   // 墙外虚空由画布底色承担；墙砖
   for (let i = 0; i < GRID_W; i++) for (let j = 0; j < GRID_H; j++) {
@@ -238,11 +240,29 @@ function drawPlayer(ctx, p, t) {
     moving: p.moving, anim: p.anim || 0, recoil: p.cd === undefined ? 0 : clamp(p.cd / effCd, 0, 1),
     bulk: ch.bulk || 1, shotsPerDir: p.shotsPerDir,
   });
+  // 穿云枪：cd 恢复期即蓄力，能量环挂在枪口（+14px）且保底 25% 可见度
+  if (wid === 'rail' && game.state === 'play') {
+    const a = Math.atan2(p.aim.y, p.aim.x);
+    QArt.chargeRing(ctx, { x: Math.cos(a) * 14, y: Math.sin(a) * 14, ang: a, r: 12, k: .25 + .75 * clamp(1 - (p.cd || 0) / effCd, 0, 1), len: 300, t });
+  }
   ctx.restore();
 }
 
+// ── 场地危险实体：漩涡场（地贴层）→ 落地钉 + Lv5 钉间电网 ──
+function drawHazards(ctx, room, t) {
+  for (const v of room.vortexes || [])
+    QArt.vortexField(ctx, { x: v.x, y: v.y, r: v.r, k: clamp(v.life / 30, 0, 1), t, dir: 1 });
+  for (const pin of room.pins || [])
+    QArt.pinTrap(ctx, { x: pin.x, y: pin.y, r: 9, k: clamp(pin.life / 360, 0, 1), t, angle: pin.angle, cap: pin.cap, flag: true });
+  if (room.pins && room.pins.length >= 2 && room.pins.some(p => p.l5))
+    QArt.pinGrid(ctx, { pins: room.pins.map(p => ({ x: p.x, y: p.y })), k: .85 });
+}
+
 // ── 子弹：Q 版弹种 QArt.drawBullet（内部精灵缓存；tr.bulletKey 分型）──
-function drawTear(ctx, tr, t) { QArt.drawBullet(ctx, tr, t); }
+function drawTear(ctx, tr, t) {
+  if (tr.boomer) QArt.boomerangSwoosh(ctx, { x: tr.x, y: tr.y, ang: Math.atan2(tr.vy, tr.vx), r: tr.r + 4, back: tr.phase === 'back', k: 1 });
+  QArt.drawBullet(ctx, tr, t);
+}
 
 // ── 武器特效与反馈：激光束 / 闪电链 / 冲刺残影 / 枪口火光 / 抛壳 / 命中火花 / 死亡烟圈 ──
 function drawFx(ctx, g) {
@@ -261,6 +281,15 @@ function drawFx(ctx, g) {
     else if (f.type === 'casing') QArt.casing(ctx, { x: f.x, y: f.y, ang: (1 - k) * 9 + (f.ang || 0), k });
     else if (f.type === 'spark') QArt.impactSpark(ctx, { id: f.id, x: f.x, y: f.y, k, ang: f.ang, r: f.r, n: f.n || 7 });
     else if (f.type === 'puff') QArt.deathPuff(ctx, { x: f.x, y: f.y, r: f.r, k, seed: f.seed || 3 });
+    // ── v4.3 十新枪行为特效 ──
+    else if (f.type === 'blast') QArt.blastRing(ctx, { x: f.x, y: f.y, r: f.r, k, seed: f.seed || 3 });
+    else if (f.type === 'whip') QArt.whipArc(ctx, { x: f.x, y: f.y, ang: f.ang, spread: f.spread, r: f.r, k, hit: f.hit });
+    else if (f.type === 'petal') QArt.petalBurst(ctx, { x: f.x, y: f.y, r: f.r, n: f.n || 6, k, seed: f.seed || 1 });
+    else if (f.type === 'bounce') QArt.bouncePop(ctx, { x: f.x, y: f.y, r: f.r, dir: f.dir, k });
+    else if (f.type === 'hivex') QArt.hiveBurst(ctx, { x: f.x, y: f.y, r: f.r, n: f.n || 3, k, t: g.time });
+    else if (f.type === 'rail') QArt.railShot(ctx, { x1: f.x1, y1: f.y1, x2: f.x2, y2: f.y2, lvl: f.lvl || 1, k });
+    else if (f.type === 'implode') QArt.vortexImplode(ctx, { x: f.x, y: f.y, r: f.r, k });
+    else if (f.type === 'clone') QArt.shadowClone(ctx, { x: f.x, y: f.y, ang: 0, gun: 'twin', lvl: f.lvl || 1, char: QArt.PALETTES[(f.char || 0) % QArt.PALETTES.length], t: g.time, k }); // 直立剪影：残影不随瞄准角躺倒
     ctx.restore();
   }
 }
@@ -531,8 +560,10 @@ function drawHUD(ctx, g) {
     else { ctx.globalAlpha = .22; drawHeartShape(ctx, hx, hy, 9, false); ctx.globalAlpha = 1; }
   }
 
-  // 金币 / 冲刺CD（贴 HUD 底缘，与两行心形错开）
+  // 金币 / 冲刺CD（贴 HUD 底缘，与两行心形错开；v4.3-F3：冲刺槽位随金币位数让位）
   const res = [['coin', p.coins]];
+  ctx.font = 'bold 13px monospace';
+  const coinW = 10 + ctx.measureText('×' + p.coins).width + 8;
   res.forEach(([kind, n], slot) => {
     const rx = 14 + slot * 40, ry = HUD_H - 8;
     drawResIcon(ctx, kind, rx, ry, g.time);
@@ -540,7 +571,7 @@ function drawHUD(ctx, g) {
     ctx.fillText('×' + n, rx + 10, ry + 4);
   });
   { // 冲刺槽：就绪呼吸亮，冷却画进度弧；附键位标注（半径收紧，环底不越 HUD 下缘）
-    const rx = 14 + 2 * 40, ry = HUD_H - 15, ready = p.dashCd <= 0;
+    const rx = 14 + Math.max(2 * 40, coinW), ry = HUD_H - 15, ready = p.dashCd <= 0;
     ctx.save();
     if (!ready) ctx.globalAlpha = .45;
     drawResIcon(ctx, 'dash', rx, ry, g.time);
@@ -723,10 +754,23 @@ function backBtnZone() { return { x: CANVAS_W / 2 - 60, y: CANVAS_H - 44, w: 120
 function accountZone() { return { x: CANVAS_W - 250, y: 2, w: 246, h: 20 }; } // 标题屏右上账号状态条
 function acctBtnZone() { return { x: CANVAS_W / 2 - 96 + PANEL_W / 2 - 220, y: 444, w: 110, h: 32 }; } // 标题"账号"按钮（工坊左侧，与绘制矩形一致）
 function bigNextZone() { return { x: CANVAS_W / 2 - 110, y: 430, w: 220, h: 44 }; } // 结算屏大按钮
-function acctRowsZones() { // 账号面板 5 行 + 返回
-  const rows = ['status', 'nick', 'server', 'export', 'import', 'back'].map((id, i) =>
-    ({ id, x: CANVAS_W / 2 - 190, y: 150 + i * 52, w: 380, h: 44 }));
+function acctRowsZones() { // 账号面板 6 行 + 返回（v4.3-F3：行高 46/间距 50，手机触控 ≥44px 逻辑高，7 行收进 496）
+  const rows = ['status', 'nick', 'server', 'export', 'import', 'armory', 'back'].map((id, i) =>
+    ({ id, x: CANVAS_W / 2 - 190, y: 118 + i * 50, w: 380, h: 46 }));
   return rows;
+}
+// v4.3 军械库子视图：14 格枪位（7×2）+ 单抽/十连/返回
+function armoryZones() {
+  const ids = Object.keys(WEAPONS);
+  const cw = 116, ch = 62, gap = 8, cols = 7;
+  const x0 = (CANVAS_W - (cols * (cw + gap) - gap)) / 2, y0 = 96;
+  const cells = ids.map((id, i) => ({ id, x: x0 + (i % cols) * (cw + gap), y: y0 + Math.floor(i / cols) * (ch + gap), w: cw, h: ch }));
+  return {
+    cells,
+    single: { x: CANVAS_W / 2 - 240, y: 258, w: 226, h: 46 },
+    ten: { x: CANVAS_W / 2 + 14, y: 258, w: 226, h: 46 },
+    back: { x: CANVAS_W / 2 - 60, y: 318, w: 120, h: 34 },
+  };
 }
 // 标题屏选关 ◀ ▶ 按钮（绘制在 translate(PANEL_W/2) 内，命中区换算到画布坐标，同 workshopBtnZone 规则）
 function stageBtnZones() {
@@ -883,6 +927,13 @@ function drawSidePanel(ctx, g) {
   const wRange = wd.id === 'laser' ? (340 + 30 * wlvl) * (p.tearLife / 80)
     : wd.id === 'light' ? 280 * (p.tearLife / 80)
     : wd.id === 'flame' ? (24 + wlvl * 3) * p.tearSpeed * .89
+    : wd.id === 'sickle' ? p.tearSpeed * 1.05 * 28
+    : wd.id === 'mortar' ? 5.4 * (34 + wlvl * 2)
+    : wd.id === 'whip' ? 78 + 8 * wlvl
+    : wd.id === 'pin' ? p.tearSpeed * 1.1 * 70
+    : wd.id === 'rail' ? WORLD_W
+    : wd.id === 'hive' ? p.tearSpeed * .9 * 60
+    : wd.id === 'vortex' ? p.tearSpeed * 34
     : p.tearSpeed * p.tearLife;
   const rows = [
     ['生命', `${Math.ceil(p.hearts / 2)}/${Math.ceil(p.maxHearts / 2)}`, p.hearts / Math.max(1, p.maxHearts), '#a8434a'],
@@ -1039,18 +1090,20 @@ function drawFloorMap(ctx, g) {
 // ── 触屏摇杆 UI ──
 function drawTouchUI(ctx, t) {
   ctx.save();
-  ctx.globalAlpha = .34;
-  const base = (st, dx, dy) => {
-    const ox = st ? st.ox : dx, oy = st ? st.oy : dy;
-    ctx.strokeStyle = '#e0d0b8'; ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.arc(ox, oy, 52, 0, TAU); ctx.stroke();
+  const base = (st, dx, dy, drop) => {
+    let ox = st ? st.ox : dx, oy = st ? st.oy : dy;
+    // 玩家反馈摇杆挡视线：按住时视觉锚点整体下移（拇指不再压住瞄准线/战场），待机幽灵圈减淡缩小
+    if (st && drop) oy = Math.min(CANVAS_H - 44, oy + 56);
+    ctx.globalAlpha = st ? .3 : .15;
+    ctx.strokeStyle = '#e0d0b8'; ctx.lineWidth = 2.4;
+    ctx.beginPath(); ctx.arc(ox, oy, st ? 46 : 40, 0, TAU); ctx.stroke();
     const kx = st ? ox + clamp(st.x - ox, -34, 34) : ox;
     const ky = st ? oy + clamp(st.y - oy, -34, 34) : oy;
     ctx.fillStyle = '#e0d0b8';
-    ctx.beginPath(); ctx.arc(kx, ky, 22, 0, TAU); ctx.fill();
+    ctx.beginPath(); ctx.arc(kx, ky, st ? 18 : 15, 0, TAU); ctx.fill();
   };
-  base(Touch.sticks.move, 110, CANVAS_H - 100);
-  base(Touch.sticks.aim, VIEW_W - 160, CANVAS_H - 100);
+  base(Touch.sticks.move, 110, CANVAS_H - 100, false);
+  base(Touch.sticks.aim, VIEW_W - 160, CANVAS_H - 100, true);
   const b = Touch.btn || { x: VIEW_W - 70, y: CANVAS_H - 96, r: 38 };
   const p = game.player, dashReady = p && p.dashCd <= 0;
   ctx.globalAlpha = dashReady ? .5 : .25;

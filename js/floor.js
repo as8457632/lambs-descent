@@ -16,6 +16,9 @@ class Room {
     this.props = [];             // 便便等可破坏物
     this.stains = [];            // 地面污渍（装饰）
     this.blood = [];             // 血渍
+    this.scorch = [];            // 罐罐雷焦土贴花（地面常驻，同 blood 用法）
+    this.pins = [];              // 刺猬钉落地钉（危险区实体 {x,y,life,angle,cap,dmg,cds}）
+    this.vortexes = [];          // 漩涡核坍缩场（{x,y,life,r,cds}）
     this.enemies = []; this.tears = []; this.pickups = []; this.bombs = [];
     this.boss = null; this.trapdoor = null;
     this.quota = 0; this.killed = 0; this.spawnT = 0; // 配额制持续刷怪
@@ -236,8 +239,10 @@ function rollClearReward(room, floorNum) {
   const cx = WORLD_W / 2, cy = WORLD_H / 2;
   room.pickups.push(new Pickup('coin', cx + rand(-60, 60), cy + rand(-40, 40)));
   room.pickups.push(new Pickup('coin', cx + rand(-60, 60), cy + rand(-40, 40))); // 保底2币
-  if (Math.random() < .35)
-    room.pickups.push(new Pickup('weapon', cx + rand(-80, 80), cy + rand(-50, 50), null, 0, pickWeaponId(game.player)));
+  if (Math.random() < .35) {
+    const wid = pickWeaponId(game.player);
+    if (wid) room.pickups.push(new Pickup('weapon', cx + rand(-80, 80), cy + rand(-50, 50), null, 0, wid));
+  }
   if (Math.random() > .55) {
     const kind = choice(['coin', 'heart', 'halfheart', 'halfheart']);
     room.pickups.push(new Pickup(kind, cx + rand(-90, 90), cy + rand(-50, 50)));

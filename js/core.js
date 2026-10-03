@@ -135,6 +135,10 @@ const Meta = {
     delete this.data.up.bomb; // 旧存档：炸弹槽已废弃（冲刺取代）
     if (typeof this.data.char !== 'number') this.data.char = 0;
     if (typeof this.data.maxStage !== 'number') this.data.maxStage = 0;
+    // v4.3 武器库（拥有制）+ 军械券：旧档补默认
+    this.data.weapons = this.data.weapons && typeof this.data.weapons === 'object' ? this.data.weapons : {};
+    if (!this.data.weapons.tear) this.data.weapons.tear = 1;
+    if (typeof this.data.gachaTickets !== 'number') this.data.gachaTickets = 0;
     return this.data;
   },
   save() { try { localStorage.setItem(this.KEY, JSON.stringify(this.data)); } catch (e) { } },
